@@ -119,6 +119,9 @@ table.t{width:100%;border-collapse:collapse}
 table.t th,table.t td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
 table.t th{font-size:12px;color:var(--muted);font-weight:500}
 .scroll-x{overflow-x:auto}
+table.cuentas td,table.cuentas th{white-space:nowrap;padding:8px 5px}
+table.cuentas .tag{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:760px){table.cuentas .tag{max-width:96px}}
 table.t.centro th,table.t.centro td{text-align:center}
 table.t.centro td input.num{text-align:center}
 table.t.centro td input[type=checkbox]{width:18px;height:18px}
@@ -670,6 +673,7 @@ function vInicio() {
       <div class="card kpi"><div class="lbl">Efectivo por depositar</div><div class="val num ${efectivo.length ? 'warn' : ''}">${fmt(fromC(sumC(efectivo)))}</div></div>
       <div class="card kpi"><div class="lbl">Costo de tus tarjetas (12 m)</div><div class="val num">${fmt(fromC(costoC))}</div></div>
     </div>
+    ${resumenCuentas()}
     <div class="grid cols2" style="margin-top:12px">
       <div>${bloques || '<div class="card empty">No hay tarjetas activas.</div>'}</div>
       <div>
@@ -722,6 +726,32 @@ function cuentaHtml(t) {
     <div class="row wrap" style="margin-top:10px"><button class="btn sm" onclick="mDeposito(${t.id})">Registrar depósito</button>
     <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo real</button>
     <button class="btn sm ghost" onclick="UI.mov.tipo='depositos';UI.mov.tarjeta='${t.id}';UI.mov.mes='todos';irA('movimientos')">Ver depósitos</button></div>`;
+}
+// Resumen de todas las cuentas TC, arriba en Inicio
+function resumenCuentas() {
+  const ts = activos(S.tarjetas);
+  if (!ts.length) return '';
+  let totC = 0, deudaTotC = 0, sinSaldo = 0;
+  const filas = ts.map(t => {
+    const e = estadoCuenta(t), deuda = Math.max(e.deudaC, 0);
+    deudaTotC += deuda;
+    const nombre = `<span class="tag"><span class="dot" style="background:${t.color}"></span>${esc(cuentaNombre(t))}</span>`;
+    if (!e.ult) {
+      sinSaldo++;
+      return `<div class="li"><div class="main">${nombre}<div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))}</div></div>
+        <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></div>`;
+    }
+    totC += e.esperadoC;
+    const dif = e.esperadoC - deuda;
+    return `<div class="li"><div class="main">${nombre}${e.difUltC ? ' <span class="badge bad" title="El último saldo real no cuadró con tus registros">revisar</span>' : ''}
+        <div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))} · real ${fmt(e.ult.saldo)} el ${dm(e.ult.fecha)}</div></div>
+      <div class="right"><b class="num" style="font-size:16px">${fmt(fromC(e.esperadoC))}</b>
+        <div style="margin-top:3px">${dif >= 0 ? `<span class="badge ok">Sobra ${fmt(fromC(dif))}</span>` : `<span class="badge warn">Falta ${fmt(fromC(-dif))}</span>`}</div></div></div>`;
+  }).join('');
+  return `<div class="card" style="margin-top:12px"><div class="row between wrap"><h3 style="margin:0">Cuentas TC</h3>
+      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b></div></div>
+    <div class="list" style="margin-top:4px">${filas}</div>
+    <div class="tiny muted" style="margin-top:6px">Saldo = último saldo real anotado + depósitos − pagos a la tarjeta desde entonces.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div></div>`;
 }
 function mDeposito(tid) {
   const t = tar(tid), tit = titular();
