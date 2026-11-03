@@ -142,6 +142,16 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}
 /* Login */
 .login{max-width:380px;margin:12vh auto 0;padding:0 16px}
 .login .card{padding:22px}
+.pin-dots{display:flex;justify-content:center;gap:14px;margin:6px 0 18px}
+.pin-dots span{width:14px;height:14px;border-radius:50%;border:2px solid var(--line2)}
+.pin-dots span.on{background:var(--accent);border-color:var(--accent)}
+.pin-hidden{position:absolute;opacity:0;pointer-events:none;width:1px;height:1px}
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.keypad button{background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:14px 0;font-size:22px;cursor:pointer}
+.keypad button:active{background:var(--accent)}
+.keypad button.k-sec{font-size:15px;color:var(--muted)}
+.shake{animation:shake .35s}
+@keyframes shake{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
 </style>
 </head>
 <body>
@@ -152,11 +162,13 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}
     <svg viewBox="0 0 64 64"><rect x="4" y="14" width="56" height="38" rx="7" fill="#4f8ef7"/><rect x="4" y="22" width="56" height="7" fill="#121624"/><rect x="12" y="38" width="16" height="5" rx="2" fill="#fff"/></svg>
     Control TCs
   </div>
-  <form class="card" id="loginForm">
-    <div class="field"><label class="l">Correo</label><input class="f" type="email" id="lgEmail" autocomplete="username" required></div>
-    <div class="field"><label class="l">Contraseña</label><input class="f" type="password" id="lgPass" autocomplete="current-password" required></div>
-    <button class="btn pri" style="width:100%" id="lgBtn">Ingresar</button>
-    <p class="small bad" id="lgErr"></p>
+  <form class="card" id="loginForm" autocomplete="off">
+    <div class="field" id="lgUsuariosBox"><label class="l">¿Quién eres?</label><div class="chips" id="lgUsuarios"></div></div>
+    <label class="l" style="text-align:center">PIN</label>
+    <div class="pin-dots" id="pinDots"></div>
+    <input id="lgPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" class="pin-hidden">
+    <div class="keypad" id="keypad"></div>
+    <p class="small bad" id="lgErr" style="text-align:center;min-height:20px"></p>
   </form>
 </div>
 
@@ -167,6 +179,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}
     <nav class="tabs" id="tabs"></nav>
     <div class="spacer"></div>
     <span class="sync" id="sync">Sincronizado</span>
+    <button class="icon-btn" title="Bloquear" onclick="bloquear()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></button>
     <button class="icon-btn" title="Actualizar" onclick="recargar()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></button>
   </div></header>
   <main id="view"></main>
@@ -409,16 +422,64 @@ async function db(promesa, okMsg) {
 // ============================================================
 // SESIÓN
 // ============================================================
-$('#loginForm').addEventListener('submit', async e => {
-  e.preventDefault();
-  $('#lgBtn').disabled = true; $('#lgErr').textContent = '';
-  const { data, error } = await sb.auth.signInWithPassword({ email: $('#lgEmail').value.trim(), password: $('#lgPass').value });
-  $('#lgBtn').disabled = false;
-  if (error) { $('#lgErr').textContent = error.message === 'Invalid login credentials' ? 'Correo o contraseña incorrectos.' : error.message; return; }
-  iniciar(data.session);
+// Ingreso con PIN: el PIN (6 dígitos) es la contraseña real de Supabase del usuario elegido.
+// Para agregar a alguien: créale el usuario en Supabase con su PIN como contraseña, agrégalo
+// a la tabla miembros y súmalo a esta lista.
+const USUARIOS = [
+  { nombre: 'Gustavo', email: 'gustavodolorier77@gmail.com' },
+];
+const BLOQUEO_MIN = 5; // minutos fuera de la app antes de pedir el PIN otra vez
+let lgUsuario = 0, lgOcupado = false, ocultoDesde = null;
+function leerUltimoUsuario() { try { return Math.max(0, USUARIOS.findIndex(u => u.email === localStorage.getItem('ctc_usuario'))); } catch (e) { return 0; } }
+function pintarLogin() {
+  $('#lgUsuariosBox').classList.toggle('hidden', USUARIOS.length < 2);
+  $('#lgUsuarios').innerHTML = USUARIOS.map((u, i) => `<button type="button" class="chip ${i === lgUsuario ? 'on' : ''}" onclick="lgUsuario=${i};pintarLogin()">${esc(u.nombre)}</button>`).join('');
+  const n = $('#lgPin').value.length;
+  $('#pinDots').innerHTML = Array.from({ length: 6 }, (_, i) => `<span class="${i < n ? 'on' : ''}"></span>`).join('');
+}
+function teclaPin(k) {
+  if (lgOcupado) return;
+  const inp = $('#lgPin');
+  if (k === 'borrar') inp.value = inp.value.slice(0, -1);
+  else if (inp.value.length < 6) inp.value += k;
+  $('#lgErr').textContent = ''; pintarLogin();
+  if (inp.value.length === 6) entrarConPin();
+}
+$('#keypad').innerHTML = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'borrar'].map(k =>
+  k === '' ? '<span></span>' : `<button type="button" class="${k === 'borrar' ? 'k-sec' : ''}" onclick="teclaPin('${k}')">${k === 'borrar' ? 'Borrar' : k}</button>`).join('');
+$('#lgPin').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); pintarLogin(); if (e.target.value.length === 6) entrarConPin(); });
+document.addEventListener('keydown', e => {
+  if ($('#login').classList.contains('hidden') || e.target === $('#lgPin')) return;
+  if (/^\d$/.test(e.key)) teclaPin(e.key); else if (e.key === 'Backspace') teclaPin('borrar');
 });
-function mostrarLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+$('#loginForm').addEventListener('submit', e => e.preventDefault());
+async function entrarConPin() {
+  lgOcupado = true; $('#lgErr').textContent = 'Verificando…';
+  const u = USUARIOS[lgUsuario];
+  const { data, error } = await sb.auth.signInWithPassword({ email: u.email, password: $('#lgPin').value });
+  lgOcupado = false; $('#lgPin').value = ''; pintarLogin();
+  if (error) {
+    $('#lgErr').textContent = error.message === 'Invalid login credentials' ? 'PIN incorrecto' : /rate|many/i.test(error.message) ? 'Demasiados intentos. Espera unos minutos.' : error.message;
+    $('#loginForm').classList.remove('shake'); void $('#loginForm').offsetWidth; $('#loginForm').classList.add('shake');
+    return;
+  }
+  try { localStorage.setItem('ctc_usuario', u.email); } catch (e) { }
+  $('#lgErr').textContent = '';
+  if (S.user && S.user.email === data.session.user.email) { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); return; }
+  iniciar(data.session);
+}
+function mostrarLogin() {
+  lgUsuario = leerUltimoUsuario(); $('#lgPin').value = ''; pintarLogin();
+  $('#app').classList.add('hidden'); $('#login').classList.remove('hidden');
+  if (!matchMedia('(pointer:coarse)').matches) $('#lgPin').focus();
+}
+function bloquear() { cerrarModal(); mostrarLogin(); }
 async function salir() { await sb.auth.signOut(); location.reload(); }
+// Al volver a la app después de unos minutos, pide el PIN de nuevo
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') ocultoDesde = Date.now();
+  else if (S.user && ocultoDesde && Date.now() - ocultoDesde > BLOQUEO_MIN * 60000) bloquear();
+});
 
 async function iniciar(session) {
   S.user = session.user;
@@ -1117,8 +1178,8 @@ function respaldo() {
 // ARRANQUE
 // ============================================================
 (async () => {
-  const { data: { session } } = await sb.auth.getSession();
-  if (session) iniciar(session); else mostrarLogin();
+  // Siempre se pide el PIN al abrir la app
+  mostrarLogin();
   sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT') mostrarLogin(); });
 })();
 </script>
