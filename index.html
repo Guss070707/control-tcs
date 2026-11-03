@@ -753,7 +753,7 @@ async function marcarDepositado(id) {
 // ============================================================
 function nuevoForm() {
   const tit = titular(), def = tit ? 'p:' + tit.id : '';
-  return { fecha: hoyStr(), tienda: '', tarjeta_id: null, personaDef: def, items: [nuevoItem({ persona: def })], pegado: false, yaPagado: '' };
+  return { fecha: hoyStr(), tienda: '', tarjeta_id: null, personaDef: def, items: [nuevoItem({ persona: def })], pegado: false, yaPagado: '', pagoMonto: {} };
 }
 let _iid = 0;
 function nuevoItem(d = {}) { return { k: ++_iid, descripcion: '', monto: '', categoria: '', persona: F ? F.personaDef : '', ...d }; }
@@ -825,6 +825,7 @@ function vRegistrar() {
         <div class="row wrap"><div class="chips" id="rPersonas">${chipsPersonaDef()}</div>
         <button type="button" class="btn sm ghost" onclick="aplicarPersonaATodos()" title="Incluye los que cambiaste a mano">Forzar en todos</button></div></div>
       <div class="field" style="margin:14px 0 0"><label class="l">¿Ya te lo pagaron?</label><div class="chips" id="rPagado">${chipsPagado()}</div>
+        <div id="rPagadoMontos"></div>
         <div class="tiny" id="rPagadoInfo" style="margin-top:6px"></div></div>
     </div>
 
@@ -957,17 +958,55 @@ function actualizarTotal() {
   $('#rTotal').textContent = fmt(fromC(sumC(filas)));
   $('#rResumen').innerHTML = `${F.items.length} ítem(s)` + (Object.keys(tot).length ? ' · ' + Object.entries(tot).map(([id, c]) => `${esc(per(id).nombre)} ${fmt(fromC(c))}`).join(' · ') : '');
   const info = $('#rPagadoInfo'); if (!info) return;
+  const por = F.yaPagado ? pagosDeForm(filas) : {};
+  pintarMontosPago(por);
   if (!F.yaPagado) { info.innerHTML = ''; return; }
-  const otros = Object.entries(pagosDeForm(filas));
-  info.innerHTML = !otros.length ? '<span class="warn">Todo es tuyo: no hay pago que registrar.</span>'
-    : `<span class="ok">Se registrará como pagado: ${otros.map(([id, c]) => `${esc(per(id).nombre)} ${fmt(fromC(c))}`).join(' · ')}</span>`
+  if (!Object.keys(por).length) { info.innerHTML = '<span class="warn">Todo es tuyo: no hay pago que registrar.</span>'; return; }
+  const { pagos, error } = montosPagados(por);
+  if (error) { info.innerHTML = `<span class="bad">${esc(error)}</span>`; return; }
+  info.innerHTML = `<span class="ok">Se registrará como pagado: ${Object.keys(por).map(id => {
+      const p = pagos[id] || 0, resta = por[id] - p;
+      return `${esc(per(id).nombre)} ${fmt(fromC(p))}` + (resta > 0 ? ` <span class="warn">(queda debiendo ${fmt(fromC(resta))})</span>` : '');
+    }).join(' · ')}</span>`
     + (F.yaPagado === 'abono_tarjeta' ? `<span class="muted"> · y como pago a ${F.tarjeta_id ? esc(tar(F.tarjeta_id).nombre) : 'la tarjeta'} (baja lo que debes al banco)</span>` : '')
     + (F.yaPagado === 'efectivo' ? '<span class="muted"> · quedará como efectivo por depositar</span>' : '');
+}
+// Campo "¿Cuánto pagó?" por persona. Vacío = pagó todo lo suyo.
+function pintarMontosPago(por) {
+  const box = $('#rPagadoMontos'); if (!box) return;
+  const ids = Object.keys(por);
+  if (!ids.length) { box.innerHTML = ''; box.dataset.k = ''; return; }
+  if (box.dataset.k !== ids.join(',')) {
+    box.dataset.k = ids.join(',');
+    box.innerHTML = ids.map(pid => `<div class="row wrap" style="gap:8px;margin-top:8px">
+      <span class="small" style="min-width:120px">¿Cuánto pagó ${esc(per(pid).nombre)}?</span>
+      <div class="money" style="width:150px"><span>S/</span><input class="f num" data-pid="${pid}" inputmode="decimal" value="${esc(F.pagoMonto[pid] ?? '')}" oninput="F.pagoMonto[${pid}]=this.value;actualizarTotal()"></div>
+      <span class="tiny muted" data-de="${pid}"></span></div>`).join('');
+  }
+  ids.forEach(pid => {
+    const de = box.querySelector(`[data-de="${pid}"]`), inp = box.querySelector(`input[data-pid="${pid}"]`);
+    if (de) de.textContent = `de ${fmt(fromC(por[pid]))} · vacío = todo`;
+    if (inp) inp.placeholder = fromC(por[pid]).toFixed(2);
+  });
+}
+// Devuelve lo pagado por persona (céntimos) o un error si un monto no es válido
+function montosPagados(por) {
+  const pagos = {};
+  for (const [pid, totalC] of Object.entries(por)) {
+    const txt = String(F.pagoMonto[pid] ?? '').trim();
+    if (!txt) { pagos[pid] = totalC; continue; }
+    const v = parseMonto(txt);
+    if (isNaN(v) || v < 0) return { error: `Monto pagado de ${per(pid).nombre} no es válido` };
+    if (toC(v) > totalC) return { error: `${per(pid).nombre} no puede pagar más de lo suyo (${fmt(fromC(totalC))}). Si te dio de más, regístralo en Cobrar.` };
+    if (toC(v) > 0) pagos[pid] = toC(v);
+  }
+  return { pagos };
 }
 // Lo que corresponde a cada persona que no es el titular (en céntimos)
 function pagosDeForm(filas) {
   const tit = titular(), por = {};
-  filas.forEach(f => { if (!tit || f.persona_id !== tit.id) por[f.persona_id] = (por[f.persona_id] || 0) + toC(f.monto); });
+  // Los sobres no entran: se cobran aparte en Cobrar → Sobres
+  filas.forEach(f => { if ((!tit || f.persona_id !== tit.id) && !esSobre(per(f.persona_id))) por[f.persona_id] = (por[f.persona_id] || 0) + toC(f.monto); });
   Object.keys(por).forEach(k => { if (por[k] <= 0) delete por[k]; });
   return por;
 }
@@ -991,18 +1030,21 @@ async function guardarCompra() {
   const malo = filas.find(f => !f._ok);
   if (malo) return toast(`Revisa el ítem "${malo.descripcion || 'sin nombre'}": falta producto, monto o persona`, true);
   const t = tar(F.tarjeta_id), ciclo = calcCiclo(F.fecha, t);
+  let pagosAhora = null;
+  if (F.yaPagado) {
+    const r = montosPagados(pagosDeForm(filas.filter(f => f._ok)));
+    if (r.error) return toast(r.error, true);
+    pagosAhora = r.pagos;
+  }
   const boleta = crypto.randomUUID ? crypto.randomUUID() : null;
   const rows = filas.map(({ _ok, ...f }) => ({ ...f, fecha: F.fecha, tarjeta_id: F.tarjeta_id, tienda: F.tienda.trim() || null, boleta_id: boleta, ...ciclo }));
   $('#btnGuardar').disabled = true;
   try {
     const data = await db(sb.from('gastos').insert(rows).select(), `Guardado: ${rows.length} ítem(s) en ${t.nombre} por ${fmt(fromC(sumC(rows)))}`);
     S.gastos.push(...data.map(numerico));
-    if (F.yaPagado) {
-      const por = pagosDeForm(rows);
-      if (Object.keys(por).length) {
-        await registrarPagos(por, F.yaPagado, F.fecha, F.tarjeta_id, ciclo.fecha_corte, `Pagado al registrar${F.tienda.trim() ? ' · ' + F.tienda.trim() : ''}`);
-        toast(`Guardado y registrado como pagado (${METODOS[F.yaPagado]})`);
-      }
+    if (pagosAhora && Object.keys(pagosAhora).length) {
+      await registrarPagos(pagosAhora, F.yaPagado, F.fecha, F.tarjeta_id, ciclo.fecha_corte, `Pagado al registrar${F.tienda.trim() ? ' · ' + F.tienda.trim() : ''}`);
+      toast(`Guardado y registrado el pago de ${fmt(fromC(Object.values(pagosAhora).reduce((a, b) => a + b, 0)))} (${METODOS[F.yaPagado]})`);
     }
     const tn = F.tienda.trim();
     if (tn && !S.tiendas.some(x => x.nombre.toLowerCase() === tn.toLowerCase())) {
