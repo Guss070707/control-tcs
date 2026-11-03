@@ -409,6 +409,7 @@ const mesMas = (ym, n) => ymd(+ym.slice(0, 4), +ym.slice(5, 7) + n, 1).slice(0, 
 const titular = () => S.personas.find(p => p.es_titular) || S.personas[0];
 const activos = arr => arr.filter(x => x.activo !== false);
 const esSobre = p => p && p.tipo === 'sobre';
+const personasOrd = () => activos(S.personas).sort((a, b) => (a.orden || 0) - (b.orden || 0) || a.id - b.id);
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 // Sobre que corresponde a una categoría (Limpieza → sobre Limpieza, Atún y huevo → sobre Atún y huevo)
 const sobreDeCategoria = cat => cat ? activos(S.personas).find(p => esSobre(p) && norm(p.nombre) === norm(cat)) : null;
@@ -651,7 +652,7 @@ function vInicio() {
   }).join('');
 
   const mes = hoyStr().slice(0, 7);
-  const deudas = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) })).filter(x => x.l.saldoTotal !== 0);
+  const deudas = activosConSaldo().filter(p => !esSobre(p)).map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) })).filter(x => x.l.saldoTotal !== 0);
   const teDebenC = deudas.reduce((a, x) => a + Math.max(toC(x.l.saldoTotal), 0), 0);
   const efectivo = S.cobros.filter(c => !c.depositado);
   const desde = addDays(h, -365);
@@ -672,6 +673,7 @@ function vInicio() {
           ${deudas.length ? `<div class="list">${deudas.map(({ p, l }) => `<div class="li"><span class="tag"><span class="dot" style="background:${p.color}"></span>${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</span><div class="main"></div>${l.saldoTotal < 0 ? `<span class="tiny ok">a favor</span><b class="num ok">${fmt(-l.saldoTotal)}</b>` : `<b class="num">${fmt(l.saldoTotal)}</b>`}</div>`).join('')}</div>
           <button class="btn sm" style="margin-top:8px" onclick="irA('cobrar')">Ir a cobrar</button>` : '<div class="muted small">Nadie te debe nada.</div>'}
         </div>
+        ${sobresInicio()}
         <div class="card"><h3>Efectivo por depositar</h3>
           ${efectivo.length ? `<div class="list">${efectivo.map(c => `<div class="li"><div class="main"><div class="t">${esc(per(c.persona_id).nombre)} <span class="muted small">· ${dmy(c.fecha)}</span></div></div><b class="num">${fmt(c.monto)}</b><button class="btn sm" onclick="marcarDepositado(${c.id})">Depositado</button></div>`).join('')}</div>` : '<div class="muted small">No tienes efectivo pendiente de depositar.</div>'}
         </div>
@@ -680,6 +682,19 @@ function vInicio() {
         </div>
       </div>
     </div>`;
+}
+function sobresInicio() {
+  const sobres = personasOrd().filter(esSobre);
+  if (!sobres.length) return '';
+  const filas = sobres.map(p => {
+    const saldoC = saldoSobreC(p.id), debeC = toC(liquidacion(p.id, hoyStr().slice(0, 7), S.gastos, S.cobros).saldoTotal);
+    return `<div class="li"><span class="tag"><span class="dot" style="background:${p.color}"></span>${esc(p.nombre)}</span><div class="main"></div>
+      <div class="right"><b class="num ${saldoC < 0 ? 'bad' : ''}">${fmt(fromC(saldoC))}</b>${debeC > 0 ? `<div class="tiny warn">por sacar ${fmt(fromC(debeC))}</div>` : ''}</div></div>`;
+  }).join('');
+  const totC = sobres.reduce((a, p) => a + saldoSobreC(p.id), 0);
+  return `<div class="card"><div class="row between"><h3 style="margin:0">Dinero en los sobres</h3><b class="num">${fmt(fromC(totC))}</b></div>
+    <div class="tiny muted" style="margin:4px 0 6px">Efectivo que debería haber en cada sobre: aportes menos lo que ya se sacó</div>
+    <div class="list">${filas}</div><button class="btn sm" style="margin-top:8px" onclick="UI.mesCobro=hoyStr().slice(0,7);irA('cobrar')">Ver sobres</button></div>`;
 }
 function activosConSaldo() {
   const tit = titular();
@@ -755,15 +770,16 @@ function productos() {
   return m;
 }
 function opcionesPersona(sel) {
-  const ps = activos(S.personas), tit = titular(), and = ps.find(p => /andrea/i.test(p.nombre));
-  let o = ps.map(p => `<option value="p:${p.id}" ${sel === 'p:' + p.id ? 'selected' : ''}>${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</option>`).join('');
-  if (tit && and) { const v = `s:${tit.id},${and.id}`; o += `<option value="${v}" ${sel === v ? 'selected' : ''}>50/50 ${esc(tit.nombre)} + ${esc(and.nombre)}</option>`; }
+  const ps = personasOrd(), tit = titular(), and = ps.find(p => /andrea/i.test(p.nombre));
+  const ops = ps.map(p => `<option value="p:${p.id}" ${sel === 'p:' + p.id ? 'selected' : ''}>${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</option>`);
+  if (tit && and) { const v = `s:${tit.id},${and.id}`; ops.splice(2, 0, `<option value="${v}" ${sel === v ? 'selected' : ''}>50/50 ${esc(tit.nombre)} + ${esc(and.nombre)}</option>`); }
+  let o = ops.join('');
   if (sel && sel.startsWith('s:') && !(tit && and && sel === `s:${tit.id},${and.id}`)) o += `<option value="${sel}" selected>Dividido: ${sel.slice(2).split(',').map(i => esc(per(i).nombre)).join(' + ')}</option>`;
   o += `<option value="dividir">Dividir entre…</option>`;
   return o;
 }
 function chipsPersonaDef() {
-  const ps = activos(S.personas), tit = titular(), and = ps.find(p => /andrea/i.test(p.nombre));
+  const ps = personasOrd(), tit = titular(), and = ps.find(p => /andrea/i.test(p.nombre));
   const ops = ps.map(p => ({ v: 'p:' + p.id, n: p.nombre, c: p.color }));
   if (tit && and) ops.splice(2, 0, { v: `s:${tit.id},${and.id}`, n: '50/50', c: '#8b7cf6' });
   return ops.map(o => `<button type="button" class="chip ${F.personaDef === o.v ? 'on' : ''}" style="--c:${o.c}" onclick="setPersonaDef('${o.v}')"><span class="dot" style="background:${o.c}"></span>${esc(o.n)}</button>`).join('')
@@ -1065,8 +1081,14 @@ function tarjetaSobre(p, l, mes) {
       <button class="btn sm" onclick="mAporte(${p.id})">Registrar aporte</button>
     </div></div>`;
 }
+// Quienes aportan a los sobres: las personas que usan la app (Gustavo y Andrea)
+function aportantes() {
+  const nombres = USUARIOS.map(u => norm(u.nombre));
+  const ps = activos(S.personas).filter(p => !esSobre(p) && nombres.includes(norm(p.nombre)));
+  return ps.length ? ps : activos(S.personas).filter(p => !esSobre(p));
+}
 function mAporte(sid) {
-  const ps = activos(S.personas).filter(p => !esSobre(p));
+  const ps = aportantes();
   modal(`Aporte al sobre ${per(sid).nombre}`, `
     <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="apMonto" inputmode="decimal"></div></div>
     <div class="field"><label class="l">¿Quién aportó?</label><div class="chips" id="apPer">${ps.map((p, i) => `<button type="button" class="chip ${i === 0 ? 'on' : ''}" style="--c:${p.color}" data-v="${p.id}" onclick="document.querySelectorAll('#apPer .chip').forEach(x=>x.classList.toggle('on',x===this))">${esc(p.nombre)}</button>`).join('')}</div></div>
@@ -1274,9 +1296,9 @@ function vAjustes() {
       <button class="btn sm" style="margin-top:8px" onclick="nuevo('tarjetas',{nombre:'Nueva tarjeta',orden:${S.tarjetas.length + 1}})">+ Tarjeta</button></div>
 
     <div class="card"><h3>Personas</h3>
-      <p class="tiny muted" style="margin-top:-4px">El titular eres tú: a él no se le cobra. El teléfono (con 51 adelante) sirve para abrir WhatsApp directo. Un <b>sobre</b> es un fondo de dinero (Limpieza, Atún y huevo): los gastos de su categoría van solos ahí.</p>
-      <div class="scroll-x"><table class="t centro"><tr><th>Nombre</th><th>Tipo</th><th>Teléfono</th><th>Color</th><th>Titular</th><th>Activa</th><th></th></tr>
-      ${S.personas.map(p => `<tr data-id="${p.id}"><td><input class="f" name="nombre" value="${esc(p.nombre)}" style="min-width:110px"></td>
+      <p class="tiny muted" style="margin-top:-4px">El <b>orden</b> define cómo aparecen en Registrar (el 50/50 va después de los dos primeros). El titular eres tú: a él no se le cobra. El teléfono (con 51 adelante) sirve para abrir WhatsApp directo. Un <b>sobre</b> es un fondo de dinero (Limpieza, Atún y huevo): los gastos de su categoría van solos ahí.</p>
+      <div class="scroll-x"><table class="t centro"><tr><th>Orden</th><th>Nombre</th><th>Tipo</th><th>Teléfono</th><th>Color</th><th>Titular</th><th>Activa</th><th></th></tr>
+      ${[...S.personas].sort((a, b) => (a.orden || 0) - (b.orden || 0) || a.id - b.id).map(p => `<tr data-id="${p.id}"><td><input class="f num" name="orden" type="number" min="1" value="${p.orden || ''}" style="width:60px"></td><td><input class="f" name="nombre" value="${esc(p.nombre)}" style="min-width:110px"></td>
         <td><select class="f" name="tipo" style="width:110px"><option value="persona" ${!esSobre(p) ? 'selected' : ''}>Persona</option><option value="sobre" ${esSobre(p) ? 'selected' : ''}>Sobre</option></select></td>
         <td><input class="f" name="telefono" inputmode="tel" placeholder="51987654321" value="${esc(p.telefono || '')}" style="min-width:130px"></td>
         <td><input type="color" name="color" value="${p.color}"></td><td><input type="checkbox" name="es_titular" ${p.es_titular ? 'checked' : ''}></td><td><input type="checkbox" name="activo" ${p.activo !== false ? 'checked' : ''}></td>
@@ -1311,7 +1333,7 @@ function leerFila(btn) {
   cont.querySelectorAll('[name]').forEach(el => {
     const k = el.name;
     if (el.type === 'checkbox') out[k] = el.checked;
-    else if (['dia_corte', 'dia_pago', 'tarjeta_id', 'persona_id'].includes(k)) out[k] = el.value ? Number(el.value) : null;
+    else if (['dia_corte', 'dia_pago', 'tarjeta_id', 'persona_id', 'orden'].includes(k)) out[k] = el.value ? Number(el.value) : null;
     else if (['monto', 'linea_credito'].includes(k)) out[k] = el.value.trim() ? parseMonto(el.value) : null;
     else out[k] = el.value.trim() || (k === 'telefono' ? null : el.value.trim());
   });
