@@ -1,0 +1,44 @@
+# Evita que Supabase pause los proyectos gratuitos por inactividad (se pausan tras 7 días sin uso).
+# Corre cada 3 días y también se puede ejecutar a mano desde la pestaña Actions.
+name: Mantener Supabase activo
+
+on:
+  schedule:
+    - cron: '17 14 */3 * *'   # cada 3 días, 09:17 hora de Lima
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Control TCs (tarjetas)
+        run: |
+          curl -fsS -X POST "https://pkywdstonhurwxpbdpmq.supabase.co/rest/v1/rpc/ping" \
+            -H "apikey: sb_publishable_8eumXTJ_XmewcYeL3CcUJw_9ydm7NzJ" \
+            -H "Content-Type: application/json" -d '{}'
+          echo " <- tarjetas OK"
+
+      - name: Gestión Patrimonial (préstamos)
+        run: |
+          curl -fsS "https://mwctglaiehoksisptnbr.supabase.co/rest/v1/prestamos?select=id&limit=1" \
+            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im13Y3RnbGFpZWhva3Npc3B0bmJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4MDcyNTMsImV4cCI6MjA5NzM4MzI1M30.xr7y1RqCzVQ5GL9oObvJDkjiHfZhWUJfpI5DTTZtLMA" \
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im13Y3RnbGFpZWhva3Npc3B0bmJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4MDcyNTMsImV4cCI6MjA5NzM4MzI1M30.xr7y1RqCzVQ5GL9oObvJDkjiHfZhWUJfpI5DTTZtLMA" > /dev/null
+          echo "préstamos OK"
+
+      # GitHub apaga las tareas programadas si el repositorio pasa 60 días sin cambios.
+      # Este paso registra un cambio mínimo una vez al mes para que nunca se apague.
+      - uses: actions/checkout@v4
+      - name: Mantener el repositorio activo
+        run: |
+          ultimo=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - ultimo )) -gt 2592000 ]; then
+            date -u +%FT%TZ > .ultima-actividad
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .ultima-actividad
+            git commit -m "Mantener tarea programada activa"
+            git push
+          fi
