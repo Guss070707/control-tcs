@@ -127,6 +127,7 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .money{position:relative;display:inline-block}
 .money span{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
 .money input.f{padding-left:32px!important;text-align:left!important}
+.money.der{display:block} .money.der input.f{text-align:right!important}
 .filters{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
 @media (max-width:760px){.filters{grid-template-columns:1fr 1fr}}
 .seg{display:inline-flex;background:#11162a;border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px}
@@ -348,7 +349,7 @@ function adivinarCategoria(desc, tienda) {
   if (/membres/.test(d)) return 'Membresía';
   if (/inter[eé]s/.test(d)) return 'Intereses';
   if (/at[uú]n|huevo/.test(d)) return 'Atún y huevo';
-  if (/jab[oó]n|papel|lej[ií]a|leg[ií]a|detergente|suaviz|suavit|pato|quitaman|ayud[ií]n|bolsa.*basura|limpiador|sapolio|poett|kolino|esponja/.test(d)) return 'Limpieza';
+  if (/jab[oó]n|papel|lej[ií]a|leg[ií]a|detergente|suaviz|suavit|pato|quitaman|ayud[ií]n|bolsa.*basura|limpiador|sapolio|poett|kolino|esponja|bol[ií]var|\bboli\b|ariel|opal|\bace\b|clorox|lavavajilla|pinesol|glade|harpic|vanish/.test(d)) return 'Limpieza';
   if (/spotify|netflix|claude|youtube|disney|max\b|prime/.test(d)) return 'Suscripciones';
   if (/internet|celular|movistar|entel|claro|bitel|luz|enel|agua|sedapal|gas\b|calidda|c[aá]lidda/.test(d)) return 'Servicios';
   if (/mifarma|inkafarma|farmacia|boticas?/.test(t)) return 'Farmacia';
@@ -391,7 +392,7 @@ const SUPABASE_URL = 'https://pkywdstonhurwxpbdpmq.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_8eumXTJ_XmewcYeL3CcUJw_9ydm7NzJ';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const S = { user: null, personas: [], tarjetas: [], tiendas: [], recurrentes: [], gastos: [], cobros: [], pagos: [], estados: [], cargado: 0 };
+const S = { user: null, personas: [], tarjetas: [], tiendas: [], recurrentes: [], gastos: [], cobros: [], pagos: [], estados: [], aportes: [], cargado: 0 };
 const UI = { tab: 'inicio', mesCobro: null, mov: { modo: 'compra', mes: null, tarjeta: '', persona: '', cat: '', q: '', tipo: 'gastos' } };
 let F = null; // formulario de registro
 
@@ -407,6 +408,12 @@ const dmy = s => s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '';
 const mesMas = (ym, n) => ymd(+ym.slice(0, 4), +ym.slice(5, 7) + n, 1).slice(0, 7);
 const titular = () => S.personas.find(p => p.es_titular) || S.personas[0];
 const activos = arr => arr.filter(x => x.activo !== false);
+const esSobre = p => p && p.tipo === 'sobre';
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+// Sobre que corresponde a una categoría (Limpieza → sobre Limpieza, Atún y huevo → sobre Atún y huevo)
+const sobreDeCategoria = cat => cat ? activos(S.personas).find(p => esSobre(p) && norm(p.nombre) === norm(cat)) : null;
+// Saldo de un sobre = aportes − lo que se cobró del sobre (en céntimos)
+const saldoSobreC = id => sumC(S.aportes.filter(a => a.sobre_id === id)) - sumC(S.cobros.filter(c => c.persona_id === id));
 
 // ============================================================
 // AVISOS Y MODALES
@@ -537,12 +544,13 @@ const numerico = r => { if ('monto' in r) r.monto = Number(r.monto); if ('total'
 async function recargar(silencioso) {
   setSync('busy');
   try {
-    const [personas, tarjetas, tiendas, recurrentes, gastos, cobros, pagos, estados] = await Promise.all([
+    const [personas, tarjetas, tiendas, recurrentes, gastos, cobros, pagos, estados, aportes] = await Promise.all([
       traerTodo('personas', ['orden', true]), traerTodo('tarjetas', ['orden', true]), traerTodo('tiendas', ['nombre', true]),
       traerTodo('recurrentes'), traerTodo('gastos', ['fecha', true]), traerTodo('cobros', ['fecha', true]),
-      traerTodo('pagos_banco', ['fecha', true]), sb.from('estados_cuenta').select('*').then(r => { if (r.error) throw r.error; return r.data; })
+      traerTodo('pagos_banco', ['fecha', true]), sb.from('estados_cuenta').select('*').then(r => { if (r.error) throw r.error; return r.data; }),
+      traerTodo('aportes_sobre', ['fecha', true]).catch(() => [])  // si aún no se corrió 3_sobres.sql
     ]);
-    Object.assign(S, { personas, tarjetas: tarjetas.map(numerico), tiendas, recurrentes: recurrentes.map(numerico), gastos: gastos.map(numerico), cobros: cobros.map(numerico), pagos: pagos.map(numerico), estados: estados.map(numerico), cargado: Date.now() });
+    Object.assign(S, { personas, tarjetas: tarjetas.map(numerico), tiendas, recurrentes: recurrentes.map(numerico), gastos: gastos.map(numerico), cobros: cobros.map(numerico), pagos: pagos.map(numerico), estados: estados.map(numerico), aportes: aportes.map(numerico), cargado: Date.now() });
     setSync('ok');
     if (!silencioso) { render(); toast('Datos actualizados'); }
   } catch (e) { setSync('err'); toast('No se pudo cargar: ' + (e.message || e), true); }
@@ -661,7 +669,7 @@ function vInicio() {
       <div>${bloques || '<div class="card empty">No hay tarjetas activas.</div>'}</div>
       <div>
         <div class="card"><h3>Quién te debe</h3>
-          ${deudas.length ? `<div class="list">${deudas.map(({ p, l }) => `<div class="li"><span class="tag"><span class="dot" style="background:${p.color}"></span>${esc(p.nombre)}</span><div class="main"></div>${l.saldoTotal < 0 ? `<span class="tiny ok">a favor</span><b class="num ok">${fmt(-l.saldoTotal)}</b>` : `<b class="num">${fmt(l.saldoTotal)}</b>`}</div>`).join('')}</div>
+          ${deudas.length ? `<div class="list">${deudas.map(({ p, l }) => `<div class="li"><span class="tag"><span class="dot" style="background:${p.color}"></span>${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</span><div class="main"></div>${l.saldoTotal < 0 ? `<span class="tiny ok">a favor</span><b class="num ok">${fmt(-l.saldoTotal)}</b>` : `<b class="num">${fmt(l.saldoTotal)}</b>`}</div>`).join('')}</div>
           <button class="btn sm" style="margin-top:8px" onclick="irA('cobrar')">Ir a cobrar</button>` : '<div class="muted small">Nadie te debe nada.</div>'}
         </div>
         <div class="card"><h3>Efectivo por depositar</h3>
@@ -692,7 +700,7 @@ function mPagoBanco(tid, corte) {
   const c = ciclosDe(tar(tid)).find(x => x.fecha_corte === corte);
   const resta = fromC(c.totalC - c.pagadoC);
   modal(`Pago a ${tar(tid).nombre}`, `
-    <div class="field"><label class="l">Monto pagado</label><input class="f num" id="pbMonto" inputmode="decimal" value="${resta.toFixed(2)}"></div>
+    <div class="field"><label class="l">Monto pagado</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="pbMonto" inputmode="decimal" value="${resta.toFixed(2)}"></div></div>
     <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="pbFecha" value="${hoyStr()}"></div>
     <button class="btn pri" style="width:100%" onclick="guardarPagoBanco(${tid},'${corte}')">Guardar pago</button>`);
 }
@@ -706,7 +714,7 @@ function mCuadre(tid, corte) {
   const c = ciclosDe(tar(tid)).find(x => x.fecha_corte === corte);
   modal(`Cuadre ${tar(tid).nombre} · corte ${dmy(corte)}`, `
     <p class="small muted">Escribe el total que te cobra el banco en el estado de cuenta de este ciclo. La app lo compara con lo que registraste (${fmt(fromC(c.totalC))}).</p>
-    <div class="field"><label class="l">Total del estado de cuenta</label><input class="f num" id="ecTotal" inputmode="decimal" value="${c.estado ? Number(c.estado.total).toFixed(2) : ''}"></div>
+    <div class="field"><label class="l">Total del estado de cuenta</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="ecTotal" inputmode="decimal" value="${c.estado ? Number(c.estado.total).toFixed(2) : ''}"></div></div>
     <div id="ecRes" class="small"></div>
     <button class="btn pri" style="width:100%;margin-top:12px" onclick="guardarCuadre(${tid},'${corte}')">Guardar</button>`, m => {
     const upd = () => { const v = parseMonto($('#ecTotal').value); $('#ecRes').innerHTML = isNaN(v) ? '' : lineaCuadre(v, c.totalC); };
@@ -748,7 +756,7 @@ function productos() {
 }
 function opcionesPersona(sel) {
   const ps = activos(S.personas), tit = titular(), and = ps.find(p => /andrea/i.test(p.nombre));
-  let o = ps.map(p => `<option value="p:${p.id}" ${sel === 'p:' + p.id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('');
+  let o = ps.map(p => `<option value="p:${p.id}" ${sel === 'p:' + p.id ? 'selected' : ''}>${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</option>`).join('');
   if (tit && and) { const v = `s:${tit.id},${and.id}`; o += `<option value="${v}" ${sel === v ? 'selected' : ''}>50/50 ${esc(tit.nombre)} + ${esc(and.nombre)}</option>`; }
   if (sel && sel.startsWith('s:') && !(tit && and && sel === `s:${tit.id},${and.id}`)) o += `<option value="${sel}" selected>Dividido: ${sel.slice(2).split(',').map(i => esc(per(i).nombre)).join(' + ')}</option>`;
   o += `<option value="dividir">Dividir entre…</option>`;
@@ -833,7 +841,7 @@ function setPersonaDef(v) {
   F.personaDef = v; $('#rPersonas').innerHTML = chipsPersonaDef();
   F.items.forEach(i => { if (!i.manual) i.persona = v; }); pintarItems();
 }
-function aplicarPersonaATodos() { F.items.forEach(i => { i.persona = F.personaDef; i.manual = false; }); pintarItems(); }
+function aplicarPersonaATodos() { F.items.forEach(i => { i.persona = F.personaDef; i.manual = false; i.autoSobre = false; }); pintarItems(); }
 function tiendaElegida() {
   const t = S.tiendas.find(x => x.nombre.toLowerCase() === F.tienda.trim().toLowerCase());
   if (t && t.tarjeta_id) setTarjeta(t.tarjeta_id);
@@ -842,7 +850,7 @@ function pintarItems() {
   $('#items').innerHTML = F.items.map(i => `
     <div class="item" data-k="${i.k}">
       <div class="i-d"><input class="f" list="dlProd" placeholder="Producto" value="${esc(i.descripcion)}" oninput="itemDesc(${i.k},this.value)" onchange="itemDescFin(${i.k},this.value)" autocomplete="off"></div>
-      <div class="i-m"><input class="f num" inputmode="decimal" placeholder="0.00" value="${esc(i.monto)}" oninput="itemSet(${i.k},'monto',this.value)"></div>
+      <div class="i-m"><div class="money der"><span>S/</span><input class="f num" inputmode="decimal" placeholder="0.00" value="${esc(i.monto)}" oninput="itemSet(${i.k},'monto',this.value)"></div></div>
       <div class="i-c"><select class="f" onchange="itemSet(${i.k},'categoria',this.value)"><option value="">Categoría…</option>${CATEGORIAS.map(c => `<option ${i.categoria === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
       <div class="i-p"><select class="f" onchange="itemPersona(${i.k},this)">${opcionesPersona(i.persona)}</select></div>
       <div class="i-x"><button class="icon-btn" title="Quitar" onclick="quitarItem(${i.k})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -850,7 +858,14 @@ function pintarItems() {
   actualizarTotal();
 }
 const itemK = k => F.items.find(i => i.k === k);
-function itemSet(k, campo, v) { itemK(k)[campo] = v; if (campo === 'monto') actualizarTotal(); }
+function itemSet(k, campo, v) {
+  const it = itemK(k); it[campo] = v;
+  if (campo === 'categoria') {
+    if (it.autoSobre && !sobreDeCategoria(v)) { it.persona = F.personaDef; it.manual = false; it.autoSobre = false; pintarItems(); return; }
+    autoSobre(it);
+  }
+  actualizarTotal();
+}
 function itemDesc(k, v) { itemK(k).descripcion = v; }
 function itemDescFin(k, v) {
   // Completa precio y categoría sin redibujar la fila (para no borrar lo que se está escribiendo)
@@ -862,7 +877,16 @@ function itemDescFin(k, v) {
     const c = (p && p.categoria) || adivinarCategoria(v, F.tienda);
     if (c) { it.categoria = c; if (selCat) selCat.value = c; }
   }
+  autoSobre(it);
   actualizarTotal();
+}
+// Si la categoría tiene un sobre (Limpieza, Atún y huevo) y el ítem no se cambió a mano, va a ese sobre
+function autoSobre(it) {
+  const s = sobreDeCategoria(it.categoria);
+  if (!s || (it.manual && !it.autoSobre)) return;
+  it.persona = 'p:' + s.id; it.manual = true; it.autoSobre = true;
+  const sel = document.querySelector(`.item[data-k="${it.k}"] .i-p select`);
+  if (sel) sel.innerHTML = opcionesPersona(it.persona);
 }
 function itemPersona(k, sel) {
   if (sel.value === 'dividir') {
@@ -872,7 +896,7 @@ function itemPersona(k, sel) {
       <button class="btn pri" style="width:100%;margin-top:14px" onclick="confirmarDivision(${k})">Aplicar</button>`);
     sel.value = it.persona; return;
   }
-  const it = itemK(k); it.persona = sel.value; it.manual = sel.value !== F.personaDef; actualizarTotal();
+  const it = itemK(k); it.persona = sel.value; it.manual = sel.value !== F.personaDef; it.autoSobre = false; actualizarTotal();
 }
 function confirmarDivision(k) {
   const ids = [...document.querySelectorAll('#divChips input:checked')].map(x => x.value);
@@ -891,9 +915,8 @@ function leerPegado() {
   for (const it of items) {
     const p = prods.get(it.descripcion.toLowerCase());
     const cat = (p && p.categoria) || adivinarCategoria(it.descripcion, F.tienda) || '';
-    const casa = S.personas.find(x => /^casa$/i.test(x.nombre));
-    const persona = (cat === 'Limpieza' || cat === 'Atún y huevo') && casa ? 'p:' + casa.id : F.personaDef;
-    F.items.push(nuevoItem({ descripcion: it.descripcion, monto: it.monto.toFixed(2), categoria: cat, persona, manual: persona !== F.personaDef }));
+    const sobre = sobreDeCategoria(cat);
+    F.items.push(nuevoItem({ descripcion: it.descripcion, monto: it.monto.toFixed(2), categoria: cat, persona: sobre ? 'p:' + sobre.id : F.personaDef, manual: !!sobre, autoSobre: !!sobre }));
   }
   const sumaC = sumC(items);
   $('#pasteInfo').innerHTML = `Leí <b>${items.length}</b> ítems por <b class="num">${fmt(fromC(sumaC))}</b>` +
@@ -981,14 +1004,16 @@ function vCobrar() {
   // Por defecto: hasta el día 15 se muestra el mes anterior (el que se está cobrando); después, el mes actual
   if (!UI.mesCobro) { const h = hoyStr(); UI.mesCobro = +h.slice(8, 10) <= 15 ? mesMas(h.slice(0, 7), -1) : h.slice(0, 7); }
   const mes = UI.mesCobro, tit = titular();
-  const personas = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) }))
-    .filter(x => x.l.pendiente !== 0 || x.l.mes !== 0 || x.l.cobrosMes.length || x.l.aFavor);
+  const todos = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) }));
+  const personas = todos.filter(x => !esSobre(x.p) && (x.l.pendiente !== 0 || x.l.mes !== 0 || x.l.cobrosMes.length || x.l.aFavor));
+  const sobres = todos.filter(x => esSobre(x.p) && x.p.activo !== false);
   const propio = tit ? sumC(S.gastos.filter(g => g.persona_id === tit.id && g.fecha.slice(0, 7) === mes)) : 0;
   $('#view').innerHTML = `
     <div class="row between wrap" style="margin-bottom:12px"><h2 style="margin:0">Cobrar</h2>
       <div class="month-nav"><button class="btn sm" onclick="UI.mesCobro=mesMas(UI.mesCobro,-1);render()">‹</button><div class="m">${nombreMes(mes)}</div><button class="btn sm" onclick="UI.mesCobro=mesMas(UI.mesCobro,1);render()">›</button></div></div>
     <p class="small muted" style="margin-top:0">Todo lo comprado del 1 al ${ymd(+mes.slice(0, 4), +mes.slice(5, 7), 31).slice(8)} de ${nombreMes(mes).split(' ')[0]}, en cualquier tarjeta. Cada pago recibido se aplica primero a la deuda más antigua.</p>
-    <div class="grid cols2">${personas.map(({ p, l }) => tarjetaPersona(p, l, mes)).join('') || '<div class="card empty">Nada que cobrar este mes.</div>'}</div>
+    <div class="grid cols2">${personas.map(({ p, l }) => tarjetaPersona(p, l, mes)).join('') || '<div class="card empty">Ninguna persona tiene gastos este mes.</div>'}</div>
+    ${sobres.length ? `<h3 style="margin:18px 0 10px">Sobres</h3><div class="grid cols2">${sobres.map(({ p, l }) => tarjetaSobre(p, l, mes)).join('')}</div>` : ''}
     ${tit ? `<div class="card"><div class="row between"><span>Tus propios gastos de ${nombreMes(mes).split(' ')[0]}</span><b class="num">${fmt(fromC(propio))}</b></div></div>` : ''}`;
 }
 function tarjetaPersona(p, l, mes) {
@@ -1015,14 +1040,56 @@ function tarjetaPersona(p, l, mes) {
     </div></div>`;
 }
 // desdeGasto: { tarjeta_id, fecha_corte } cuando se registra el pago de un gasto puntual
+function tarjetaSobre(p, l, mes) {
+  const n = nombreMes(mes).split(' ')[0], saldoC = saldoSobreC(p.id), pendC = toC(Math.max(l.pendiente, 0));
+  const aportesMes = S.aportes.filter(a => a.sobre_id === p.id && a.fecha.slice(0, 7) === mes);
+  const porT = {}; l.gastosMes.forEach(g => (porT[g.tarjeta_id] ||= []).push(g));
+  const alcanza = saldoC >= pendC;
+  return `<div class="card" style="border-top:3px solid ${p.color}">
+    <div class="row between"><h3 style="margin:0">Sobre ${esc(p.nombre)}</h3>${l.pendiente > 0 ? '<span class="badge warn">Por cobrar</span>' : l.mes > 0 ? '<span class="badge ok">Cobrado</span>' : ''}</div>
+    <div class="row between" style="margin-top:10px"><span class="muted small">Dinero en el sobre</span><b class="amount num ${saldoC < 0 ? 'bad' : ''}">${fmt(fromC(saldoC))}</b></div>
+    <table class="t small num" style="margin-top:6px">
+      ${l.anterior ? `<tr><td class="muted">Por cobrar de meses anteriores</td><td class="right warn">${fmt(l.anterior)}</td></tr>` : ''}
+      <tr><td class="muted">Gastado en ${n}</td><td class="right">${fmt(l.mes)}</td></tr>
+      <tr><td class="muted">Ya se sacó del sobre</td><td class="right ok">${l.cobrado ? '−' + fmt(l.cobrado) : fmt(0)}</td></tr>
+      <tr><td><b>Falta sacar del sobre</b></td><td class="right"><b class="${l.pendiente > 0 ? 'warn' : ''}">${fmt(l.pendiente)}</b></td></tr>
+    </table>
+    ${pendC > 0 && !alcanza ? `<div class="small bad" style="margin-top:6px">El sobre no alcanza: faltan ${fmt(fromC(pendC - saldoC))}. Registra un aporte.</div>` : ''}
+    ${l.gastosMes.length ? `<details><summary>Ver gastos (${l.gastosMes.length})</summary>${Object.entries(porT).map(([tid, gs]) => `
+      <div class="day">${esc(tar(tid).nombre)} · ${fmt(fromC(sumC(gs)))}</div>
+      <div class="list">${gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(g => filaGasto(g, true)).join('')}</div>`).join('')}</details>` : ''}
+    ${aportesMes.length ? `<details><summary>Aportes de ${n} (${aportesMes.length})</summary><div class="list">${aportesMes.map(a => `<div class="li"><div class="main"><div class="t">${a.persona_id ? esc(per(a.persona_id).nombre) : 'Aporte'}</div><div class="tiny muted">${dmy(a.fecha)}${a.nota ? ' · ' + esc(a.nota) : ''}</div></div><b class="num ok">${fmt(a.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('aportes_sobre',${a.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('')}</div></details>` : ''}
+    ${l.cobrosMes.length ? `<details><summary>Sacado del sobre en ${n} (${l.cobrosMes.length})</summary><div class="list">${l.cobrosMes.map(filaCobro).join('')}</div></details>` : ''}
+    <div class="row wrap" style="margin-top:12px">
+      <button class="btn sm pri" onclick="mCobro(${p.id}, ${Math.max(l.pendiente, 0)})" ${l.pendiente > 0 ? '' : 'disabled'}>Cobrar del sobre</button>
+      <button class="btn sm" onclick="mAporte(${p.id})">Registrar aporte</button>
+    </div></div>`;
+}
+function mAporte(sid) {
+  const ps = activos(S.personas).filter(p => !esSobre(p));
+  modal(`Aporte al sobre ${per(sid).nombre}`, `
+    <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="apMonto" inputmode="decimal"></div></div>
+    <div class="field"><label class="l">¿Quién aportó?</label><div class="chips" id="apPer">${ps.map((p, i) => `<button type="button" class="chip ${i === 0 ? 'on' : ''}" style="--c:${p.color}" data-v="${p.id}" onclick="document.querySelectorAll('#apPer .chip').forEach(x=>x.classList.toggle('on',x===this))">${esc(p.nombre)}</button>`).join('')}</div></div>
+    <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="apFecha" value="${hoyStr()}"></div>
+    <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="apNota"></div>
+    <button class="btn pri" style="width:100%" onclick="guardarAporte(${sid})">Guardar aporte</button>`, () => $('#apMonto').focus());
+}
+async function guardarAporte(sid) {
+  const monto = parseMonto($('#apMonto').value);
+  if (!(monto > 0)) return toast('Monto inválido', true);
+  const on = document.querySelector('#apPer .chip.on');
+  const row = numerico(await db(sb.from('aportes_sobre').insert({ sobre_id: sid, persona_id: on ? +on.dataset.v : null, monto, fecha: $('#apFecha').value, nota: $('#apNota').value.trim() || null }).select().single(), 'Aporte guardado'));
+  S.aportes.push(row); cerrarModal(); render();
+}
 function mCobro(pid, sugerido, edit, desdeGasto) {
   const c = edit ? S.cobros.find(x => x.id === edit) : null;
   UI.cobroGasto = desdeGasto || null;
-  const metodoIni = c ? c.metodo : desdeGasto ? 'abono_tarjeta' : 'yape';
+  const sobre = esSobre(per(pid));
+  const metodoIni = c ? c.metodo : desdeGasto ? 'abono_tarjeta' : sobre ? 'efectivo' : 'yape';
   const tarIni = c && c.pago_banco_id ? (S.pagos.find(x => x.id === c.pago_banco_id) || {}).tarjeta_id : desdeGasto ? desdeGasto.tarjeta_id : null;
-  modal(c ? 'Editar pago recibido' : `Pago de ${per(pid).nombre}`, `
-    <div class="field"><label class="l">Monto</label><input class="f num" id="cbMonto" inputmode="decimal" value="${c ? c.monto.toFixed(2) : sugerido ? Number(sugerido).toFixed(2) : ''}"></div>
-    <div class="field"><label class="l">Cómo te pagó</label><div class="chips" id="cbMetodo">${Object.keys(METODOS).map(m => `<button type="button" class="chip ${metodoIni === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this));$('#cbTarBox').classList.toggle('hidden',this.dataset.v!=='abono_tarjeta')">${METODOS[m]}</button>`).join('')}</div>
+  modal(c ? 'Editar pago recibido' : sobre ? `Sacar del sobre ${per(pid).nombre}` : `Pago de ${per(pid).nombre}`, `
+    <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="cbMonto" inputmode="decimal" value="${c ? c.monto.toFixed(2) : sugerido ? Number(sugerido).toFixed(2) : ''}"></div></div>
+    <div class="field"><label class="l">${sobre ? '¿Qué haces con ese dinero?' : 'Cómo te pagó'}</label><div class="chips" id="cbMetodo">${Object.keys(METODOS).map(m => `<button type="button" class="chip ${metodoIni === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this));$('#cbTarBox').classList.toggle('hidden',this.dataset.v!=='abono_tarjeta')">${METODOS[m]}</button>`).join('')}</div>
       <div class="tiny muted" style="margin-top:6px">Efectivo queda “por depositar” hasta que lo lleves a la cuenta. “Abonó a la tarjeta” también se registra como pago a ese banco.</div></div>
     <div class="field ${metodoIni === 'abono_tarjeta' ? '' : 'hidden'}" id="cbTarBox"><label class="l">¿A qué tarjeta abonó?</label>
       <select class="f" id="cbTar">${activos(S.tarjetas).map(t => `<option value="${t.id}" ${tarIni === t.id ? 'selected' : ''}>${esc(t.nombre)}</option>`).join('')}</select></div>
@@ -1142,7 +1209,7 @@ function mGasto(id) {
   modal('Editar gasto', `
     <div class="field"><label class="l">Producto</label><input class="f" id="gDesc" value="${esc(g.descripcion)}"></div>
     <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">
-      <div class="field"><label class="l">Monto</label><input class="f num" id="gMonto" inputmode="decimal" value="${g.monto.toFixed(2)}"></div>
+      <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="gMonto" inputmode="decimal" value="${g.monto.toFixed(2)}"></div></div>
       <div class="field"><label class="l">Fecha de compra</label><input class="f" type="date" id="gFecha" value="${g.fecha}"></div></div>
     <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">
       <div class="field"><label class="l">Tarjeta</label><select class="f" id="gTar">${S.tarjetas.map(t => `<option value="${t.id}" ${t.id === g.tarjeta_id ? 'selected' : ''}>${esc(t.nombre)}</option>`).join('')}</select></div>
@@ -1172,7 +1239,7 @@ async function borrar(tabla, id) {
   await db(sb.from(tabla).delete().eq('id', id), 'Eliminado');
   if (enlazado) { await db(sb.from('pagos_banco').delete().eq('id', enlazado)); S.pagos = S.pagos.filter(p => p.id !== enlazado); }
   if (tabla === 'pagos_banco') S.cobros.forEach(c => { if (c.pago_banco_id === id) c.pago_banco_id = null; });
-  const k = { gastos: 'gastos', cobros: 'cobros', pagos_banco: 'pagos', tiendas: 'tiendas', recurrentes: 'recurrentes' }[tabla];
+  const k = { gastos: 'gastos', cobros: 'cobros', pagos_banco: 'pagos', tiendas: 'tiendas', recurrentes: 'recurrentes', aportes_sobre: 'aportes' }[tabla];
   S[k] = S[k].filter(x => x.id !== id); cerrarModal(); render();
 }
 function descargar(nombre, contenido, tipo) {
@@ -1207,13 +1274,16 @@ function vAjustes() {
       <button class="btn sm" style="margin-top:8px" onclick="nuevo('tarjetas',{nombre:'Nueva tarjeta',orden:${S.tarjetas.length + 1}})">+ Tarjeta</button></div>
 
     <div class="card"><h3>Personas</h3>
-      <p class="tiny muted" style="margin-top:-4px">El titular eres tú: a él no se le cobra. El teléfono (con 51 adelante) sirve para abrir WhatsApp directo.</p>
-      <div class="scroll-x"><table class="t centro"><tr><th>Nombre</th><th>Teléfono</th><th>Color</th><th>Titular</th><th>Activa</th><th></th></tr>
+      <p class="tiny muted" style="margin-top:-4px">El titular eres tú: a él no se le cobra. El teléfono (con 51 adelante) sirve para abrir WhatsApp directo. Un <b>sobre</b> es un fondo de dinero (Limpieza, Atún y huevo): los gastos de su categoría van solos ahí.</p>
+      <div class="scroll-x"><table class="t centro"><tr><th>Nombre</th><th>Tipo</th><th>Teléfono</th><th>Color</th><th>Titular</th><th>Activa</th><th></th></tr>
       ${S.personas.map(p => `<tr data-id="${p.id}"><td><input class="f" name="nombre" value="${esc(p.nombre)}" style="min-width:110px"></td>
+        <td><select class="f" name="tipo" style="width:110px"><option value="persona" ${!esSobre(p) ? 'selected' : ''}>Persona</option><option value="sobre" ${esSobre(p) ? 'selected' : ''}>Sobre</option></select></td>
         <td><input class="f" name="telefono" inputmode="tel" placeholder="51987654321" value="${esc(p.telefono || '')}" style="min-width:130px"></td>
         <td><input type="color" name="color" value="${p.color}"></td><td><input type="checkbox" name="es_titular" ${p.es_titular ? 'checked' : ''}></td><td><input type="checkbox" name="activo" ${p.activo !== false ? 'checked' : ''}></td>
         <td><button class="btn sm" onclick="guardarFila('personas',${p.id},this)">Guardar</button></td></tr>`).join('')}</table></div>
-      <button class="btn sm" style="margin-top:8px" onclick="nuevo('personas',{nombre:'Nueva persona',orden:${S.personas.length + 1}})">+ Persona</button></div>
+      <div class="row wrap" style="margin-top:8px"><button class="btn sm" onclick="nuevo('personas',{nombre:'Nueva persona',orden:${S.personas.length + 1}})">+ Persona</button>
+      <button class="btn sm" onclick="nuevo('personas',{nombre:'Nuevo sobre',tipo:'sobre',orden:${S.personas.length + 1}})">+ Sobre</button></div>
+      <p class="tiny muted">Para que un sobre reciba solo los gastos de una categoría, ponle el mismo nombre que la categoría (por ejemplo “Limpieza”).</p></div>
 
     <div class="card"><h3>Cargos fijos</h3>
       <p class="tiny muted" style="margin-top:-4px">Se agregan solos una vez por ciclo de cada tarjeta, al abrir la app. Si un mes el monto cambia, edita ese gasto en Movimientos.</p>
