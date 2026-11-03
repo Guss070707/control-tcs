@@ -119,6 +119,14 @@ table.t{width:100%;border-collapse:collapse}
 table.t th,table.t td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
 table.t th{font-size:12px;color:var(--muted);font-weight:500}
 .scroll-x{overflow-x:auto}
+table.t.centro th,table.t.centro td{text-align:center}
+table.t.centro td input.num{text-align:center}
+table.t.centro td input[type=checkbox]{width:18px;height:18px}
+input[type=number]{-moz-appearance:textfield;appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.money{position:relative;display:inline-block}
+.money span{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.money input.f{padding-left:32px!important;text-align:left!important}
 .filters{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
 @media (max-width:760px){.filters{grid-template-columns:1fr 1fr}}
 .seg{display:inline-flex;background:#11162a;border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px}
@@ -248,6 +256,9 @@ function parseMonto(v) {
   if (!/^-?\d*\.?\d+$/.test(s)) return NaN;
   return Math.round(Number(s) * 100) / 100;
 }
+
+// 5800 → "5800"; 5800.5 → "5800.50" (decimales solo si los tiene)
+function numCorto(n) { const v = Number(n); return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 
 function fmt(n) {
   const v = Number(n) || 0;
@@ -1186,18 +1197,18 @@ function vAjustes() {
     <h2>Ajustes</h2>
     <div class="card"><h3>Tarjetas</h3>
       <p class="tiny muted" style="margin-top:-4px">El día de corte y de pago definen a qué ciclo va cada compra. Los encuentras en tu estado de cuenta. Si los cambias, la app recalcula los ciclos de esa tarjeta.</p>
-      <div class="scroll-x"><table class="t"><tr><th>Nombre</th><th>Corte</th><th>Pago</th><th>Línea</th><th>Color</th><th>Activa</th><th></th></tr>
+      <div class="scroll-x"><table class="t centro"><tr><th>Nombre</th><th>Corte</th><th title="Fecha límite de pago">F. lím. pago</th><th>Línea</th><th>Color</th><th>Activa</th><th></th></tr>
       ${S.tarjetas.map(t => `<tr data-id="${t.id}"><td><input class="f" name="nombre" value="${esc(t.nombre)}" style="min-width:110px"></td>
         <td><input class="f num" name="dia_corte" type="number" min="1" max="31" value="${t.dia_corte || ''}" style="width:70px"></td>
-        <td><input class="f num" name="dia_pago" type="number" min="1" max="31" value="${t.dia_pago || ''}" style="width:70px"></td>
-        <td><input class="f num" name="linea_credito" inputmode="decimal" value="${t.linea_credito != null ? t.linea_credito.toFixed(2) : ''}" style="width:110px"></td>
+        <td><input class="f num" name="dia_pago" type="number" min="1" max="31" value="${t.dia_pago || ''}" style="width:70px" title="Fecha límite de pago"></td>
+        <td><div class="money"><span>S/</span><input class="f num" name="linea_credito" inputmode="decimal" value="${t.linea_credito != null ? numCorto(t.linea_credito) : ''}" style="width:120px"></div></td>
         <td><input type="color" name="color" value="${t.color}"></td><td><input type="checkbox" name="activo" ${t.activo !== false ? 'checked' : ''}></td>
         <td><button class="btn sm" onclick="guardarTarjeta(${t.id},this)">Guardar</button></td></tr>`).join('')}</table></div>
       <button class="btn sm" style="margin-top:8px" onclick="nuevo('tarjetas',{nombre:'Nueva tarjeta',orden:${S.tarjetas.length + 1}})">+ Tarjeta</button></div>
 
     <div class="card"><h3>Personas</h3>
       <p class="tiny muted" style="margin-top:-4px">El titular eres tú: a él no se le cobra. El teléfono (con 51 adelante) sirve para abrir WhatsApp directo.</p>
-      <div class="scroll-x"><table class="t"><tr><th>Nombre</th><th>Teléfono</th><th>Color</th><th>Titular</th><th>Activa</th><th></th></tr>
+      <div class="scroll-x"><table class="t centro"><tr><th>Nombre</th><th>Teléfono</th><th>Color</th><th>Titular</th><th>Activa</th><th></th></tr>
       ${S.personas.map(p => `<tr data-id="${p.id}"><td><input class="f" name="nombre" value="${esc(p.nombre)}" style="min-width:110px"></td>
         <td><input class="f" name="telefono" inputmode="tel" placeholder="51987654321" value="${esc(p.telefono || '')}" style="min-width:130px"></td>
         <td><input type="color" name="color" value="${p.color}"></td><td><input type="checkbox" name="es_titular" ${p.es_titular ? 'checked' : ''}></td><td><input type="checkbox" name="activo" ${p.activo !== false ? 'checked' : ''}></td>
@@ -1206,9 +1217,9 @@ function vAjustes() {
 
     <div class="card"><h3>Cargos fijos</h3>
       <p class="tiny muted" style="margin-top:-4px">Se agregan solos una vez por ciclo de cada tarjeta, al abrir la app. Si un mes el monto cambia, edita ese gasto en Movimientos.</p>
-      <div class="scroll-x"><table class="t"><tr><th>Descripción</th><th>Monto</th><th>Tarjeta</th><th>Persona</th><th>Categoría</th><th>Activo</th><th></th></tr>
+      <div class="scroll-x"><table class="t centro"><tr><th>Descripción</th><th>Monto</th><th>Tarjeta</th><th>Persona</th><th>Categoría</th><th>Activo</th><th></th></tr>
       ${S.recurrentes.map(r => `<tr data-id="${r.id}"><td><input class="f" name="descripcion" value="${esc(r.descripcion)}" style="min-width:110px"></td>
-        <td><input class="f num" name="monto" inputmode="decimal" value="${r.monto.toFixed(2)}" style="width:90px"></td>
+        <td><div class="money"><span>S/</span><input class="f num" name="monto" inputmode="decimal" value="${r.monto.toFixed(2)}" style="width:110px"></div></td>
         <td><select class="f" name="tarjeta_id">${tOps(r.tarjeta_id)}</select></td><td><select class="f" name="persona_id">${pOps(r.persona_id)}</select></td>
         <td><select class="f" name="categoria">${CATEGORIAS.map(c => `<option ${c === r.categoria ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
         <td><input type="checkbox" name="activo" ${r.activo !== false ? 'checked' : ''}></td>
