@@ -767,7 +767,7 @@ function resumenCuentas() {
   const conLinea = ts.map(lineaInfo).filter(l => l.lineaC !== null);
   const dispTotC = conLinea.reduce((a, l) => a + l.dispC, 0);
   return `<div class="card" style="margin-top:12px"><div class="row between wrap"><h3 style="margin:0">Cuentas TC</h3>
-      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b>${conLinea.length ? ` · Disponible para gastar <b class="num">${fmt(fromC(dispTotC))}</b>` : ''}</div></div>
+      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b>${conLinea.length ? ` · Línea disponible <b class="num">${fmt(fromC(dispTotC))}</b>` : ''}</div></div>
     <div class="list" style="margin-top:4px">${filas}</div>
     <div class="tiny muted" style="margin-top:6px">Saldo = último saldo real anotado + depósitos − pagos a la tarjeta desde entonces.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div></div>`;
 }
