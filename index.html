@@ -655,7 +655,7 @@ function vInicio() {
       <div class="num" style="font-weight:600">${fmt(fromC(abierto ? abierto.totalC - abierto.pagadoC : 0))}</div>
       ${abierto && abierto.pagadoC ? `<div class="tiny muted">Total ${fmt(fromC(abierto.totalC))} · ya abonado ${fmt(fromC(abierto.pagadoC))}</div>` : ''}</div>
       ${abierto ? `<button class="btn sm ghost" onclick="verCiclo(${t.id},'${abierto.fecha_corte}')">Ver detalle</button>` : ''}</div>`;
-    return `<div class="card tc" style="--c:${t.color}"><div class="tc-head"><div><div class="tc-name">${esc(t.nombre)}</div><div class="tiny muted">${cfg}</div></div></div>${pendHtml}${abiertoHtml}${cuentaHtml(t)}</div>`;
+    return `<div class="card tc" style="--c:${t.color}"><div class="tc-head"><div style="flex:1"><div class="tc-name">${esc(t.nombre)}</div><div class="tiny muted">${cfg}</div>${lineaHtml(t)}</div></div>${pendHtml}${abiertoHtml}${cuentaHtml(t)}</div>`;
   }).join('');
 
   const mes = hoyStr().slice(0, 7);
@@ -668,7 +668,7 @@ function vInicio() {
 
   $('#view').innerHTML = `
     <div class="grid kpis">
-      <div class="card kpi"><div class="lbl">Por pagar a bancos</div><div class="val num">${fmt(fromC(porPagarC))}</div></div>
+      <div class="card kpi"><div class="lbl" title="Ciclos ya cerrados que falta pagar">Facturado por pagar</div><div class="val num">${fmt(fromC(porPagarC))}</div></div>
       <div class="card kpi"><div class="lbl">Te deben (a la fecha)</div><div class="val num">${fmt(fromC(teDebenC))}</div></div>
       <div class="card kpi"><div class="lbl">Efectivo por depositar</div><div class="val num ${efectivo.length ? 'warn' : ''}">${fmt(fromC(sumC(efectivo)))}</div></div>
       <div class="card kpi"><div class="lbl">Costo de tus tarjetas (12 m)</div><div class="val num">${fmt(fromC(costoC))}</div></div>
@@ -727,6 +727,20 @@ function cuentaHtml(t) {
     <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo real</button>
     <button class="btn sm ghost" onclick="UI.mov.tipo='depositos';UI.mov.tarjeta='${t.id}';UI.mov.mes='todos';irA('movimientos')">Ver depósitos</button></div>`;
 }
+// Línea de crédito y disponible según lo registrado (línea − lo que aún no pagas)
+function lineaInfo(t) {
+  const usadoC = Math.max(sumC(S.gastos.filter(g => g.tarjeta_id === t.id)) - sumC(S.pagos.filter(p => p.tarjeta_id === t.id)), 0);
+  if (t.linea_credito == null || !(t.linea_credito > 0)) return { usadoC, lineaC: null };
+  const lineaC = toC(t.linea_credito);
+  return { usadoC, lineaC, dispC: lineaC - usadoC, pct: Math.min(100, Math.round(usadoC / lineaC * 100)) };
+}
+function lineaHtml(t, compacto) {
+  const l = lineaInfo(t);
+  if (l.lineaC === null) return `<div class="tiny muted" style="margin-top:3px">Pon la línea de crédito en Ajustes para ver el disponible</div>`;
+  const color = l.pct >= 90 ? 'var(--bad)' : l.pct >= 70 ? 'var(--warn)' : 'var(--ok)';
+  return `<div class="tiny" style="margin-top:4px"><span class="muted" style="white-space:nowrap">Línea ${fmt(fromC(l.lineaC))} ·</span> <b class="num" style="white-space:nowrap;color:${l.dispC < 0 ? 'var(--bad)' : 'inherit'}">${l.dispC < 0 ? 'Sobregiro ' + fmt(fromC(-l.dispC)) : 'Disponible ' + fmt(fromC(l.dispC))}</b> <span class="muted">· usado ${l.pct}%</span></div>
+    <div class="bar" style="height:5px;margin:4px 0 0;${compacto ? 'max-width:260px' : ''}"><span style="width:${l.pct}%;background:${color}"></span></div>`;
+}
 // Resumen de todas las cuentas TC, arriba en Inicio
 function resumenCuentas() {
   const ts = activos(S.tarjetas);
@@ -738,18 +752,20 @@ function resumenCuentas() {
     const nombre = `<span class="tag"><span class="dot" style="background:${t.color}"></span>${esc(cuentaNombre(t))}</span>`;
     if (!e.ult) {
       sinSaldo++;
-      return `<div class="li"><div class="main">${nombre}<div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))}</div></div>
+      return `<div class="li"><div class="main">${nombre}<div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))}</div>${lineaHtml(t, true)}</div>
         <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></div>`;
     }
     totC += e.esperadoC;
     const dif = e.esperadoC - deuda;
     return `<div class="li"><div class="main">${nombre}${e.difUltC ? ' <span class="badge bad" title="El último saldo real no cuadró con tus registros">revisar</span>' : ''}
-        <div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))} · real ${fmt(e.ult.saldo)} el ${dm(e.ult.fecha)}</div></div>
+        <div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))} · real ${fmt(e.ult.saldo)} el ${dm(e.ult.fecha)}</div>${lineaHtml(t, true)}</div>
       <div class="right"><b class="num" style="font-size:16px">${fmt(fromC(e.esperadoC))}</b>
         <div style="margin-top:3px">${dif >= 0 ? `<span class="badge ok">Sobra ${fmt(fromC(dif))}</span>` : `<span class="badge warn">Falta ${fmt(fromC(-dif))}</span>`}</div></div></div>`;
   }).join('');
+  const conLinea = ts.map(lineaInfo).filter(l => l.lineaC !== null);
+  const dispTotC = conLinea.reduce((a, l) => a + l.dispC, 0);
   return `<div class="card" style="margin-top:12px"><div class="row between wrap"><h3 style="margin:0">Cuentas TC</h3>
-      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b></div></div>
+      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b>${conLinea.length ? ` · Disponible para gastar <b class="num">${fmt(fromC(dispTotC))}</b>` : ''}</div></div>
     <div class="list" style="margin-top:4px">${filas}</div>
     <div class="tiny muted" style="margin-top:6px">Saldo = último saldo real anotado + depósitos − pagos a la tarjeta desde entonces.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div></div>`;
 }
