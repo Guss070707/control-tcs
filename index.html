@@ -1003,14 +1003,18 @@ function tarjetaPersona(p, l, mes) {
       <button class="btn sm" onclick="whatsapp(${p.id})">Enviar por WhatsApp</button>
     </div></div>`;
 }
-function mCobro(pid, sugerido, edit) {
+// desdeGasto: { tarjeta_id, fecha_corte } cuando se registra el pago de un gasto puntual
+function mCobro(pid, sugerido, edit, desdeGasto) {
   const c = edit ? S.cobros.find(x => x.id === edit) : null;
+  UI.cobroGasto = desdeGasto || null;
+  const metodoIni = c ? c.metodo : desdeGasto ? 'abono_tarjeta' : 'yape';
+  const tarIni = c && c.pago_banco_id ? (S.pagos.find(x => x.id === c.pago_banco_id) || {}).tarjeta_id : desdeGasto ? desdeGasto.tarjeta_id : null;
   modal(c ? 'Editar pago recibido' : `Pago de ${per(pid).nombre}`, `
     <div class="field"><label class="l">Monto</label><input class="f num" id="cbMonto" inputmode="decimal" value="${c ? c.monto.toFixed(2) : sugerido ? Number(sugerido).toFixed(2) : ''}"></div>
-    <div class="field"><label class="l">Cómo te pagó</label><div class="chips" id="cbMetodo">${Object.keys(METODOS).map(m => `<button type="button" class="chip ${(c ? c.metodo : 'yape') === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this));$('#cbTarBox').classList.toggle('hidden',this.dataset.v!=='abono_tarjeta')">${METODOS[m]}</button>`).join('')}</div>
+    <div class="field"><label class="l">Cómo te pagó</label><div class="chips" id="cbMetodo">${Object.keys(METODOS).map(m => `<button type="button" class="chip ${metodoIni === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this));$('#cbTarBox').classList.toggle('hidden',this.dataset.v!=='abono_tarjeta')">${METODOS[m]}</button>`).join('')}</div>
       <div class="tiny muted" style="margin-top:6px">Efectivo queda “por depositar” hasta que lo lleves a la cuenta. “Abonó a la tarjeta” también se registra como pago a ese banco.</div></div>
-    <div class="field ${c && c.metodo === 'abono_tarjeta' ? '' : 'hidden'}" id="cbTarBox"><label class="l">¿A qué tarjeta abonó?</label>
-      <select class="f" id="cbTar">${activos(S.tarjetas).map(t => { const pb = c && c.pago_banco_id && S.pagos.find(x => x.id === c.pago_banco_id); return `<option value="${t.id}" ${pb && pb.tarjeta_id === t.id ? 'selected' : ''}>${esc(t.nombre)}</option>`; }).join('')}</select></div>
+    <div class="field ${metodoIni === 'abono_tarjeta' ? '' : 'hidden'}" id="cbTarBox"><label class="l">¿A qué tarjeta abonó?</label>
+      <select class="f" id="cbTar">${activos(S.tarjetas).map(t => `<option value="${t.id}" ${tarIni === t.id ? 'selected' : ''}>${esc(t.nombre)}</option>`).join('')}</select></div>
     <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="cbFecha" value="${c ? c.fecha : hoyStr()}"></div>
     <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="cbNota" value="${esc(c ? c.nota || '' : '')}"></div>
     <button class="btn pri" style="width:100%" onclick="guardarCobro(${pid}, ${c ? c.id : 'null'})">Guardar</button>`);
@@ -1021,8 +1025,10 @@ async function guardarCobro(pid, id) {
   const metodo = document.querySelector('#cbMetodo .chip.on').dataset.v;
   const fecha = $('#cbFecha').value, nota = $('#cbNota').value.trim() || null, tid = +$('#cbTar').value;
   if (!id) {
-    if (metodo === 'abono_tarjeta') await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, tid, cicloParaAbono(tid, fecha), nota);
-    else await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, null, null, nota);
+    // Si viene de un gasto y abonó a esa misma tarjeta, el abono va al ciclo de ese gasto
+    const dg = UI.cobroGasto, corte = dg && dg.tarjeta_id === tid ? dg.fecha_corte : cicloParaAbono(tid, fecha);
+    if (metodo === 'abono_tarjeta') await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, tid, corte, nota || (dg && dg.nota) || null);
+    else await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, null, null, nota || (dg && dg.nota) || null);
     toast('Pago guardado'); cerrarModal(); render(); return;
   }
   // Edición: mantener sincronizado el pago al banco enlazado
@@ -1070,11 +1076,11 @@ function whatsapp(pid) {
 // ============================================================
 function filaGasto(g, compacto) {
   const p = per(g.persona_id), t = tar(g.tarjeta_id);
-  return `<div class="li"><span class="dot" style="width:9px;height:9px;border-radius:50%;background:${p.color};flex:none"></span>
+  return `<div class="li" style="cursor:pointer" onclick="mGasto(${g.id})"><span class="dot" style="width:9px;height:9px;border-radius:50%;background:${p.color};flex:none"></span>
     <div class="main"><div class="t">${esc(g.descripcion)}${g.recurrente_id ? ' <span class="tag">fijo</span>' : ''}</div>
     <div class="tiny muted t">${compacto ? dmy(g.fecha) + ' · ' : ''}${esc(p.nombre)} · ${esc(t.nombre)} · ${esc(g.categoria)}${g.tienda ? ' · ' + esc(g.tienda) : ''}${g.nota ? ' · ' + esc(g.nota) : ''}</div></div>
     <b class="num ${g.monto < 0 ? 'ok' : ''}">${fmt(g.monto)}</b>
-    ${compacto ? '' : `<button class="icon-btn" title="Editar" onclick="mGasto(${g.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></button>`}</div>`;
+    ${compacto ? '' : `<button class="icon-btn" title="Editar" onclick="event.stopPropagation();mGasto(${g.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></button>`}</div>`;
 }
 function filaCobro(c) {
   const pb = c.pago_banco_id && S.pagos.find(p => p.id === c.pago_banco_id);
@@ -1133,7 +1139,13 @@ function mGasto(id) {
     <div class="field"><label class="l">Categoría</label><select class="f" id="gCat">${CATEGORIAS.map(c => `<option ${c === g.categoria ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><label class="l">Nota</label><input class="f" id="gNota" value="${esc(g.nota || '')}"></div>
     <div class="tiny muted" style="margin-bottom:12px">Ciclo: corte ${dmy(g.fecha_corte)} · pago ${dmy(g.fecha_pago)}${g.creado_por ? ' · registrado por ' + esc(g.creado_por) : ''}</div>
+    ${titular() && g.persona_id !== titular().id && g.monto > 0 ? `<div class="paste-box" style="margin-bottom:12px"><div class="small" style="margin-bottom:8px">¿${esc(per(g.persona_id).nombre)} ya te pagó esto o lo abonó a la tarjeta?</div>
+      <button class="btn sm pri" onclick="pagoDeGasto(${g.id})">Registrar pago de este gasto</button></div>` : ''}
     <div class="row"><button class="btn danger" onclick="borrar('gastos',${g.id})">Eliminar</button><div class="grow"></div><button class="btn pri" onclick="guardarGasto(${g.id})">Guardar</button></div>`);
+}
+function pagoDeGasto(id) {
+  const g = S.gastos.find(x => x.id === id);
+  mCobro(g.persona_id, g.monto, null, { tarjeta_id: g.tarjeta_id, fecha_corte: g.fecha_corte, nota: `Pago de: ${g.descripcion}` });
 }
 async function guardarGasto(id) {
   const monto = parseMonto($('#gMonto').value), desc = $('#gDesc').value.trim();
