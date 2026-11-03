@@ -347,16 +347,27 @@ function adivinarCategoria(desc, tienda) {
   return null;
 }
 
-// Liquidación de una persona para un mes de pago (YYYY-MM):
-// anterior = gastos que vencían antes del mes − cobros antes del mes
-// pendiente = anterior + gastos del mes − cobros del mes
+// Liquidación de una persona por MES CALENDARIO DE COMPRA (YYYY-MM), independiente del ciclo del banco:
+// anterior  = gastos comprados antes del mes − pagos recibidos antes del mes
+// pendiente = anterior + gastos comprados en el mes − pagos recibidos en el mes
 function liquidacion(personaId, mes, gastos, cobros) {
   const ini = mes + '-01';
   const g = gastos.filter(x => x.persona_id === personaId), c = cobros.filter(x => x.persona_id === personaId);
-  const gAnt = sumC(g.filter(x => x.fecha_pago < ini)), cAnt = sumC(c.filter(x => x.fecha < ini));
-  const gMes = g.filter(x => x.fecha_pago.slice(0, 7) === mes), cMes = c.filter(x => x.fecha.slice(0, 7) === mes);
-  const anteriorC = gAnt - cAnt, mesC = sumC(gMes), cobradoC = sumC(cMes);
-  return { anterior: fromC(anteriorC), mes: fromC(mesC), cobrado: fromC(cobradoC), pendiente: fromC(anteriorC + mesC - cobradoC), gastosMes: gMes, cobrosMes: cMes };
+  // Cada pago recibido se aplica primero al mes más antiguo que tenga deuda (aunque se haya pagado después)
+  const porMes = {};
+  g.forEach(x => { const m = x.fecha.slice(0, 7); porMes[m] = (porMes[m] || 0) + toC(x.monto); });
+  let bolsa = sumC(c), anteriorC = 0, aplicadoC = 0;
+  for (const m of Object.keys(porMes).sort()) {
+    const d = porMes[m], a = d > 0 ? Math.min(Math.max(bolsa, 0), d) : d;
+    bolsa -= a;
+    if (m < mes) anteriorC += d - a; else if (m === mes) aplicadoC = a;
+  }
+  const gMes = g.filter(x => x.fecha.slice(0, 7) === mes), cMes = c.filter(x => x.fecha.slice(0, 7) === mes);
+  const mesC = porMes[mes] || 0, totalC = sumC(g) - sumC(c);
+  return {
+    anterior: fromC(anteriorC), mes: fromC(mesC), cobrado: fromC(aplicadoC), pendiente: fromC(anteriorC + mesC - aplicadoC),
+    aFavor: fromC(Math.max(-totalC, 0)), saldoTotal: fromC(totalC), gastosMes: gMes, cobrosMes: cMes, ini
+  };
 }
 // ==LOGIC-END==
 </script>
@@ -621,8 +632,8 @@ function vInicio() {
   }).join('');
 
   const mes = hoyStr().slice(0, 7);
-  const deudas = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) })).filter(x => x.l.pendiente !== 0);
-  const teDebenC = deudas.reduce((a, x) => a + toC(x.l.pendiente), 0);
+  const deudas = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) })).filter(x => x.l.saldoTotal !== 0);
+  const teDebenC = deudas.reduce((a, x) => a + Math.max(toC(x.l.saldoTotal), 0), 0);
   const efectivo = S.cobros.filter(c => !c.depositado);
   const desde = addDays(h, -365);
   const costos = activos(S.tarjetas).map(t => ({ t, c: sumC(S.gastos.filter(g => g.tarjeta_id === t.id && g.fecha >= desde && CAT_COSTO.includes(g.categoria))) }));
@@ -631,7 +642,7 @@ function vInicio() {
   $('#view').innerHTML = `
     <div class="grid kpis">
       <div class="card kpi"><div class="lbl">Por pagar a bancos</div><div class="val num">${fmt(fromC(porPagarC))}</div></div>
-      <div class="card kpi"><div class="lbl">Te deben (${nombreMes(mes).split(' ')[0]})</div><div class="val num">${fmt(fromC(teDebenC))}</div></div>
+      <div class="card kpi"><div class="lbl">Te deben (a la fecha)</div><div class="val num">${fmt(fromC(teDebenC))}</div></div>
       <div class="card kpi"><div class="lbl">Efectivo por depositar</div><div class="val num ${efectivo.length ? 'warn' : ''}">${fmt(fromC(sumC(efectivo)))}</div></div>
       <div class="card kpi"><div class="lbl">Costo de tus tarjetas (12 m)</div><div class="val num">${fmt(fromC(costoC))}</div></div>
     </div>
@@ -639,8 +650,8 @@ function vInicio() {
       <div>${bloques || '<div class="card empty">No hay tarjetas activas.</div>'}</div>
       <div>
         <div class="card"><h3>Quién te debe</h3>
-          ${deudas.length ? `<div class="list">${deudas.map(({ p, l }) => `<div class="li"><span class="tag"><span class="dot" style="background:${p.color}"></span>${esc(p.nombre)}</span><div class="main"></div><b class="num ${l.pendiente < 0 ? 'ok' : ''}">${fmt(l.pendiente)}</b></div>`).join('')}</div>
-          <button class="btn sm" style="margin-top:8px" onclick="irA('cobrar')">Ir a cobrar</button>` : '<div class="muted small">Nadie te debe nada este mes.</div>'}
+          ${deudas.length ? `<div class="list">${deudas.map(({ p, l }) => `<div class="li"><span class="tag"><span class="dot" style="background:${p.color}"></span>${esc(p.nombre)}</span><div class="main"></div>${l.saldoTotal < 0 ? `<span class="tiny ok">a favor</span><b class="num ok">${fmt(-l.saldoTotal)}</b>` : `<b class="num">${fmt(l.saldoTotal)}</b>`}</div>`).join('')}</div>
+          <button class="btn sm" style="margin-top:8px" onclick="irA('cobrar')">Ir a cobrar</button>` : '<div class="muted small">Nadie te debe nada.</div>'}
         </div>
         <div class="card"><h3>Efectivo por depositar</h3>
           ${efectivo.length ? `<div class="list">${efectivo.map(c => `<div class="li"><div class="main"><div class="t">${esc(per(c.persona_id).nombre)} <span class="muted small">· ${dmy(c.fecha)}</span></div></div><b class="num">${fmt(c.monto)}</b><button class="btn sm" onclick="marcarDepositado(${c.id})">Depositado</button></div>`).join('')}</div>` : '<div class="muted small">No tienes efectivo pendiente de depositar.</div>'}
@@ -708,7 +719,7 @@ async function marcarDepositado(id) {
 // ============================================================
 function nuevoForm() {
   const tit = titular(), def = tit ? 'p:' + tit.id : '';
-  return { fecha: hoyStr(), tienda: '', tarjeta_id: null, personaDef: def, items: [nuevoItem({ persona: def })], pegado: false };
+  return { fecha: hoyStr(), tienda: '', tarjeta_id: null, personaDef: def, items: [nuevoItem({ persona: def })], pegado: false, yaPagado: '' };
 }
 let _iid = 0;
 function nuevoItem(d = {}) { return { k: ++_iid, descripcion: '', monto: '', categoria: '', persona: F ? F.personaDef : '', ...d }; }
@@ -736,7 +747,32 @@ function chipsPersonaDef() {
   const ps = activos(S.personas), tit = titular(), and = ps.find(p => /andrea/i.test(p.nombre));
   const ops = ps.map(p => ({ v: 'p:' + p.id, n: p.nombre, c: p.color }));
   if (tit && and) ops.splice(2, 0, { v: `s:${tit.id},${and.id}`, n: '50/50', c: '#8b7cf6' });
-  return ops.map(o => `<button type="button" class="chip ${F.personaDef === o.v ? 'on' : ''}" style="--c:${o.c}" onclick="setPersonaDef('${o.v}')"><span class="dot" style="background:${o.c}"></span>${esc(o.n)}</button>`).join('');
+  return ops.map(o => `<button type="button" class="chip ${F.personaDef === o.v ? 'on' : ''}" style="--c:${o.c}" onclick="setPersonaDef('${o.v}')"><span class="dot" style="background:${o.c}"></span>${esc(o.n)}</button>`).join('')
+    + `<button type="button" class="chip" style="border-style:dashed" onclick="mNuevaPersona()">+ Otra persona</button>`;
+}
+const METODOS = { yape: 'Yape', plin: 'Plin', efectivo: 'Efectivo', transferencia: 'Transferencia', abono_tarjeta: 'Abonó a la tarjeta', otro: 'Otro' };
+function chipsPagado() {
+  return [['', 'No, cobrar después'], ['abono_tarjeta', 'Abonó a la tarjeta'], ['yape', 'Yape'], ['efectivo', 'Efectivo'], ['plin', 'Plin'], ['transferencia', 'Transferencia']]
+    .map(([v, n]) => `<button type="button" class="chip ${F.yaPagado === v ? 'on' : ''}" style="--c:${v ? '#3fbf8a' : '#64748b'}" onclick="F.yaPagado='${v}';$('#rPagado').innerHTML=chipsPagado();actualizarTotal()">${n}</button>`).join('');
+}
+const PALETA = ['#f97316', '#14b8a6', '#eab308', '#8b5cf6', '#06b6d4', '#84cc16', '#f43f5e', '#0ea5e9', '#d946ef', '#22c55e'];
+function mNuevaPersona() {
+  modal('Agregar persona', `<p class="small muted">Para familiares o amigos que te piden comprar algo con tu tarjeta. Aparecerá en Cobrar con su propio saldo.</p>
+    <div class="field"><label class="l">Nombre</label><input class="f" id="npNombre" placeholder="Ej. Tía Ani"></div>
+    <div class="field"><label class="l">Celular para WhatsApp (opcional)</label><input class="f" id="npTel" inputmode="tel" placeholder="51987654321"></div>
+    <button class="btn pri" style="width:100%" onclick="guardarNuevaPersona()">Agregar</button>`, () => $('#npNombre').focus());
+}
+async function guardarNuevaPersona() {
+  const nombre = $('#npNombre').value.trim().replace(/\s+/g, ' ');
+  if (!nombre) return toast('Escribe el nombre', true);
+  const existe = S.personas.find(p => p.nombre.toLowerCase() === nombre.toLowerCase());
+  if (existe) {
+    if (existe.activo === false) { await db(sb.from('personas').update({ activo: true }).eq('id', existe.id)); existe.activo = true; }
+    cerrarModal(); setPersonaDef('p:' + existe.id); return;
+  }
+  const tel = $('#npTel').value.replace(/\D/g, '') || null;
+  const row = await db(sb.from('personas').insert({ nombre, telefono: tel, color: PALETA[S.personas.length % PALETA.length], orden: S.personas.length + 1 }).select().single(), `${nombre} agregada`);
+  S.personas.push(row); cerrarModal(); setPersonaDef('p:' + row.id);
 }
 function vRegistrar() {
   if (!F) F = nuevoForm();
@@ -750,9 +786,11 @@ function vRegistrar() {
       </div>
       <datalist id="dlTiendas">${S.tiendas.map(t => `<option value="${esc(t.nombre)}">`).join('')}</datalist>
       <div class="field"><label class="l">Tarjeta</label><div class="chips" id="rTarjetas"></div></div>
-      <div class="field" style="margin-bottom:0"><label class="l">¿De quién son? (se aplica a los ítems nuevos)</label>
+      <div class="field" style="margin-bottom:0"><label class="l">¿De quién son? (cambia todos, menos los que ajustes a mano abajo)</label>
         <div class="row wrap"><div class="chips" id="rPersonas">${chipsPersonaDef()}</div>
-        <button type="button" class="btn sm ghost" onclick="aplicarPersonaATodos()">Aplicar a todos los ítems</button></div></div>
+        <button type="button" class="btn sm ghost" onclick="aplicarPersonaATodos()" title="Incluye los que cambiaste a mano">Forzar en todos</button></div></div>
+      <div class="field" style="margin:14px 0 0"><label class="l">¿Ya te lo pagaron?</label><div class="chips" id="rPagado">${chipsPagado()}</div>
+        <div class="tiny" id="rPagadoInfo" style="margin-top:6px"></div></div>
     </div>
 
     <div class="row wrap" style="margin-bottom:10px">
@@ -779,8 +817,12 @@ function pintarTarjetas() {
   $('#rTarjetas').innerHTML = activos(S.tarjetas).map(t => `<button type="button" class="chip ${F.tarjeta_id === t.id ? 'on' : ''}" style="--c:${t.color}" onclick="setTarjeta(${t.id})"><span class="dot" style="background:${t.color}"></span>${esc(t.nombre)}</button>`).join('');
 }
 function setTarjeta(id) { F.tarjeta_id = id; pintarTarjetas(); actualizarTotal(); }
-function setPersonaDef(v) { F.personaDef = v; $('#rPersonas').innerHTML = chipsPersonaDef(); }
-function aplicarPersonaATodos() { F.items.forEach(i => i.persona = F.personaDef); pintarItems(); }
+// Elegir arriba cambia todos los ítems, salvo los que se cambiaron a mano (o que la app mandó a Casa)
+function setPersonaDef(v) {
+  F.personaDef = v; $('#rPersonas').innerHTML = chipsPersonaDef();
+  F.items.forEach(i => { if (!i.manual) i.persona = v; }); pintarItems();
+}
+function aplicarPersonaATodos() { F.items.forEach(i => { i.persona = F.personaDef; i.manual = false; }); pintarItems(); }
 function tiendaElegida() {
   const t = S.tiendas.find(x => x.nombre.toLowerCase() === F.tienda.trim().toLowerCase());
   if (t && t.tarjeta_id) setTarjeta(t.tarjeta_id);
@@ -800,15 +842,16 @@ const itemK = k => F.items.find(i => i.k === k);
 function itemSet(k, campo, v) { itemK(k)[campo] = v; if (campo === 'monto') actualizarTotal(); }
 function itemDesc(k, v) { itemK(k).descripcion = v; }
 function itemDescFin(k, v) {
+  // Completa precio y categoría sin redibujar la fila (para no borrar lo que se está escribiendo)
   const it = itemK(k), p = productos().get(v.trim().toLowerCase());
-  let cambio = false;
-  if (p) {
-    if (it.monto === '' || it.monto == null) { it.monto = Number(p.monto).toFixed(2); cambio = true; }
-    if (!it.categoria) { it.categoria = p.categoria; cambio = true; }
-  } else if (!it.categoria) {
-    const c = adivinarCategoria(v, F.tienda); if (c) { it.categoria = c; cambio = true; }
+  const fila = document.querySelector(`.item[data-k="${k}"]`);
+  const inMonto = fila && fila.querySelector('.i-m input'), selCat = fila && fila.querySelector('.i-c select');
+  if (p && String(it.monto).trim() === '' && inMonto && inMonto.value.trim() === '') { it.monto = Number(p.monto).toFixed(2); inMonto.value = it.monto; }
+  if (!it.categoria) {
+    const c = (p && p.categoria) || adivinarCategoria(v, F.tienda);
+    if (c) { it.categoria = c; if (selCat) selCat.value = c; }
   }
-  if (cambio) pintarItems();
+  actualizarTotal();
 }
 function itemPersona(k, sel) {
   if (sel.value === 'dividir') {
@@ -818,12 +861,12 @@ function itemPersona(k, sel) {
       <button class="btn pri" style="width:100%;margin-top:14px" onclick="confirmarDivision(${k})">Aplicar</button>`);
     sel.value = it.persona; return;
   }
-  itemK(k).persona = sel.value; actualizarTotal();
+  const it = itemK(k); it.persona = sel.value; it.manual = sel.value !== F.personaDef; actualizarTotal();
 }
 function confirmarDivision(k) {
   const ids = [...document.querySelectorAll('#divChips input:checked')].map(x => x.value);
   if (ids.length < 2) return toast('Elige al menos 2 personas', true);
-  itemK(k).persona = 's:' + ids.join(','); cerrarModal(); pintarItems();
+  const it = itemK(k); it.persona = 's:' + ids.join(','); it.manual = true; cerrarModal(); pintarItems();
 }
 function agregarItem(d) { F.items.push(nuevoItem(d)); pintarItems(); const ins = document.querySelectorAll('#items .i-d input'); ins.length && ins[ins.length - 1].focus(); }
 function quitarItem(k) { F.items = F.items.filter(i => i.k !== k); pintarItems(); }
@@ -839,7 +882,7 @@ function leerPegado() {
     const cat = (p && p.categoria) || adivinarCategoria(it.descripcion, F.tienda) || '';
     const casa = S.personas.find(x => /^casa$/i.test(x.nombre));
     const persona = (cat === 'Limpieza' || cat === 'Atún y huevo') && casa ? 'p:' + casa.id : F.personaDef;
-    F.items.push(nuevoItem({ descripcion: it.descripcion, monto: it.monto.toFixed(2), categoria: cat, persona }));
+    F.items.push(nuevoItem({ descripcion: it.descripcion, monto: it.monto.toFixed(2), categoria: cat, persona, manual: persona !== F.personaDef }));
   }
   const sumaC = sumC(items);
   $('#pasteInfo').innerHTML = `Leí <b>${items.length}</b> ítems por <b class="num">${fmt(fromC(sumaC))}</b>` +
@@ -863,6 +906,32 @@ function actualizarTotal() {
   filas.forEach(f => tot[f.persona_id] = (tot[f.persona_id] || 0) + toC(f.monto));
   $('#rTotal').textContent = fmt(fromC(sumC(filas)));
   $('#rResumen').innerHTML = `${F.items.length} ítem(s)` + (Object.keys(tot).length ? ' · ' + Object.entries(tot).map(([id, c]) => `${esc(per(id).nombre)} ${fmt(fromC(c))}`).join(' · ') : '');
+  const info = $('#rPagadoInfo'); if (!info) return;
+  if (!F.yaPagado) { info.innerHTML = ''; return; }
+  const otros = Object.entries(pagosDeForm(filas));
+  info.innerHTML = !otros.length ? '<span class="warn">Todo es tuyo: no hay pago que registrar.</span>'
+    : `<span class="ok">Se registrará como pagado: ${otros.map(([id, c]) => `${esc(per(id).nombre)} ${fmt(fromC(c))}`).join(' · ')}</span>`
+    + (F.yaPagado === 'abono_tarjeta' ? `<span class="muted"> · y como pago a ${F.tarjeta_id ? esc(tar(F.tarjeta_id).nombre) : 'la tarjeta'} (baja lo que debes al banco)</span>` : '')
+    + (F.yaPagado === 'efectivo' ? '<span class="muted"> · quedará como efectivo por depositar</span>' : '');
+}
+// Lo que corresponde a cada persona que no es el titular (en céntimos)
+function pagosDeForm(filas) {
+  const tit = titular(), por = {};
+  filas.forEach(f => { if (!tit || f.persona_id !== tit.id) por[f.persona_id] = (por[f.persona_id] || 0) + toC(f.monto); });
+  Object.keys(por).forEach(k => { if (por[k] <= 0) delete por[k]; });
+  return por;
+}
+// Registra el pago de cada persona; si abonó a la tarjeta, también el pago al banco de ese ciclo
+async function registrarPagos(por, metodo, fecha, tid, fechaCorte, nota) {
+  for (const [pid, c] of Object.entries(por)) {
+    const monto = fromC(c); let pago_banco_id = null;
+    if (metodo === 'abono_tarjeta') {
+      const pb = numerico(await db(sb.from('pagos_banco').insert({ tarjeta_id: tid, fecha_corte: fechaCorte, fecha, monto, nota: `Abono de ${per(pid).nombre}` }).select().single()));
+      S.pagos.push(pb); pago_banco_id = pb.id;
+    }
+    const cb = await db(sb.from('cobros').insert({ persona_id: +pid, monto, metodo, fecha, depositado: metodo !== 'efectivo', fecha_deposito: metodo !== 'efectivo' ? fecha : null, nota, pago_banco_id }).select().single());
+    S.cobros.push(numerico(cb));
+  }
 }
 async function guardarCompra() {
   if (!F.tarjeta_id) return toast('Elige la tarjeta', true);
@@ -878,6 +947,13 @@ async function guardarCompra() {
   try {
     const data = await db(sb.from('gastos').insert(rows).select(), `Guardado: ${rows.length} ítem(s) en ${t.nombre} por ${fmt(fromC(sumC(rows)))}`);
     S.gastos.push(...data.map(numerico));
+    if (F.yaPagado) {
+      const por = pagosDeForm(rows);
+      if (Object.keys(por).length) {
+        await registrarPagos(por, F.yaPagado, F.fecha, F.tarjeta_id, ciclo.fecha_corte, `Pagado al registrar${F.tienda.trim() ? ' · ' + F.tienda.trim() : ''}`);
+        toast(`Guardado y registrado como pagado (${METODOS[F.yaPagado]})`);
+      }
+    }
     const tn = F.tienda.trim();
     if (tn && !S.tiendas.some(x => x.nombre.toLowerCase() === tn.toLowerCase())) {
       const { data: nt } = await sb.from('tiendas').insert({ nombre: tn, tarjeta_id: F.tarjeta_id }).select().single();
@@ -891,34 +967,37 @@ async function guardarCompra() {
 // COBRAR (liquidación mensual por persona)
 // ============================================================
 function vCobrar() {
-  if (!UI.mesCobro) UI.mesCobro = hoyStr().slice(0, 7);
+  // Por defecto: hasta el día 15 se muestra el mes anterior (el que se está cobrando); después, el mes actual
+  if (!UI.mesCobro) { const h = hoyStr(); UI.mesCobro = +h.slice(8, 10) <= 15 ? mesMas(h.slice(0, 7), -1) : h.slice(0, 7); }
   const mes = UI.mesCobro, tit = titular();
   const personas = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) }))
-    .filter(x => x.l.pendiente !== 0 || x.l.mes !== 0 || x.l.cobrado !== 0);
-  const propio = tit ? sumC(S.gastos.filter(g => g.persona_id === tit.id && g.fecha_pago.slice(0, 7) === mes)) : 0;
+    .filter(x => x.l.pendiente !== 0 || x.l.mes !== 0 || x.l.cobrosMes.length || x.l.aFavor);
+  const propio = tit ? sumC(S.gastos.filter(g => g.persona_id === tit.id && g.fecha.slice(0, 7) === mes)) : 0;
   $('#view').innerHTML = `
     <div class="row between wrap" style="margin-bottom:12px"><h2 style="margin:0">Cobrar</h2>
       <div class="month-nav"><button class="btn sm" onclick="UI.mesCobro=mesMas(UI.mesCobro,-1);render()">‹</button><div class="m">${nombreMes(mes)}</div><button class="btn sm" onclick="UI.mesCobro=mesMas(UI.mesCobro,1);render()">›</button></div></div>
-    <p class="small muted" style="margin-top:0">Gastos cuyo pago al banco vence en ${nombreMes(mes)}. Los saldos de meses anteriores se arrastran.</p>
+    <p class="small muted" style="margin-top:0">Todo lo comprado del 1 al ${ymd(+mes.slice(0, 4), +mes.slice(5, 7), 31).slice(8)} de ${nombreMes(mes).split(' ')[0]}, en cualquier tarjeta. Cada pago recibido se aplica primero a la deuda más antigua.</p>
     <div class="grid cols2">${personas.map(({ p, l }) => tarjetaPersona(p, l, mes)).join('') || '<div class="card empty">Nada que cobrar este mes.</div>'}</div>
-    ${tit ? `<div class="card"><div class="row between"><span>Tus propios gastos que vencen en ${nombreMes(mes).split(' ')[0]}</span><b class="num">${fmt(fromC(propio))}</b></div></div>` : ''}`;
+    ${tit ? `<div class="card"><div class="row between"><span>Tus propios gastos de ${nombreMes(mes).split(' ')[0]}</span><b class="num">${fmt(fromC(propio))}</b></div></div>` : ''}`;
 }
 function tarjetaPersona(p, l, mes) {
   const porT = {};
   l.gastosMes.forEach(g => (porT[g.tarjeta_id] ||= []).push(g));
-  const estado = l.pendiente === 0 && (l.mes || l.cobrado) ? '<span class="badge ok">Al día</span>' : l.pendiente < 0 ? '<span class="badge ok">A favor</span>' : l.pendiente > 0 ? '<span class="badge warn">Pendiente</span>' : '';
+  const n = nombreMes(mes).split(' ')[0];
+  const estado = l.pendiente > 0 ? '<span class="badge warn">Pendiente</span>' : l.mes > 0 ? '<span class="badge ok">Pagado</span>' : l.aFavor ? '<span class="badge ok">A favor</span>' : '';
   return `<div class="card" style="border-top:3px solid ${p.color}">
     <div class="row between"><h3 style="margin:0">${esc(p.nombre)}</h3>${estado}</div>
     <table class="t small num" style="margin-top:8px">
-      <tr><td class="muted">Saldo anterior</td><td class="right">${fmt(l.anterior)}</td></tr>
-      <tr><td class="muted">Gastos de ${nombreMes(mes).split(' ')[0]}</td><td class="right">${fmt(l.mes)}</td></tr>
-      <tr><td class="muted">Ya pagó este mes</td><td class="right ok">${l.cobrado ? '−' + fmt(l.cobrado) : fmt(0)}</td></tr>
+      ${l.anterior ? `<tr><td class="muted">Pendiente de meses anteriores</td><td class="right warn">${fmt(l.anterior)}</td></tr>` : ''}
+      <tr><td class="muted">Gastos de ${n}</td><td class="right">${fmt(l.mes)}</td></tr>
+      <tr><td class="muted">Pagado de ${n}</td><td class="right ok">${l.cobrado ? '−' + fmt(l.cobrado) : fmt(0)}</td></tr>
       <tr><td><b>Pendiente</b></td><td class="right"><b class="amount ${l.pendiente > 0 ? 'warn' : ''}">${fmt(l.pendiente)}</b></td></tr>
+      ${l.aFavor ? `<tr><td class="muted">Saldo a favor (se descuenta solo)</td><td class="right ok">${fmt(l.aFavor)}</td></tr>` : ''}
     </table>
     ${l.gastosMes.length ? `<details><summary>Ver detalle (${l.gastosMes.length})</summary>${Object.entries(porT).map(([tid, gs]) => `
-      <div class="day">${esc(tar(tid).nombre)} · vence ${dm(gs[0].fecha_pago)} · ${fmt(fromC(sumC(gs)))}</div>
-      <div class="list">${gs.map(g => filaGasto(g, true)).join('')}</div>`).join('')}</details>` : ''}
-    ${l.cobrosMes.length ? `<details><summary>Pagos recibidos (${l.cobrosMes.length})</summary><div class="list">${l.cobrosMes.map(filaCobro).join('')}</div></details>` : ''}
+      <div class="day">${esc(tar(tid).nombre)} · ${fmt(fromC(sumC(gs)))}</div>
+      <div class="list">${gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(g => filaGasto(g, true)).join('')}</div>`).join('')}</details>` : ''}
+    ${l.cobrosMes.length ? `<details><summary>Pagos recibidos en ${n} (${l.cobrosMes.length})</summary><div class="list">${l.cobrosMes.map(filaCobro).join('')}</div></details>` : ''}
     <div class="row wrap" style="margin-top:12px">
       <button class="btn sm pri" onclick="mCobro(${p.id}, ${Math.max(l.pendiente, 0)})">Registrar pago</button>
       <button class="btn sm" onclick="whatsapp(${p.id})">Enviar por WhatsApp</button>
@@ -928,8 +1007,10 @@ function mCobro(pid, sugerido, edit) {
   const c = edit ? S.cobros.find(x => x.id === edit) : null;
   modal(c ? 'Editar pago recibido' : `Pago de ${per(pid).nombre}`, `
     <div class="field"><label class="l">Monto</label><input class="f num" id="cbMonto" inputmode="decimal" value="${c ? c.monto.toFixed(2) : sugerido ? Number(sugerido).toFixed(2) : ''}"></div>
-    <div class="field"><label class="l">Cómo te pagó</label><div class="chips" id="cbMetodo">${['yape', 'plin', 'efectivo', 'transferencia', 'otro'].map(m => `<button type="button" class="chip ${(c ? c.metodo : 'yape') === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this))">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>
-      <div class="tiny muted" style="margin-top:6px">Si es efectivo, queda marcado como “por depositar” hasta que lo lleves a la cuenta.</div></div>
+    <div class="field"><label class="l">Cómo te pagó</label><div class="chips" id="cbMetodo">${Object.keys(METODOS).map(m => `<button type="button" class="chip ${(c ? c.metodo : 'yape') === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this));$('#cbTarBox').classList.toggle('hidden',this.dataset.v!=='abono_tarjeta')">${METODOS[m]}</button>`).join('')}</div>
+      <div class="tiny muted" style="margin-top:6px">Efectivo queda “por depositar” hasta que lo lleves a la cuenta. “Abonó a la tarjeta” también se registra como pago a ese banco.</div></div>
+    <div class="field ${c && c.metodo === 'abono_tarjeta' ? '' : 'hidden'}" id="cbTarBox"><label class="l">¿A qué tarjeta abonó?</label>
+      <select class="f" id="cbTar">${activos(S.tarjetas).map(t => { const pb = c && c.pago_banco_id && S.pagos.find(x => x.id === c.pago_banco_id); return `<option value="${t.id}" ${pb && pb.tarjeta_id === t.id ? 'selected' : ''}>${esc(t.nombre)}</option>`; }).join('')}</select></div>
     <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="cbFecha" value="${c ? c.fecha : hoyStr()}"></div>
     <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="cbNota" value="${esc(c ? c.nota || '' : '')}"></div>
     <button class="btn pri" style="width:100%" onclick="guardarCobro(${pid}, ${c ? c.id : 'null'})">Guardar</button>`);
@@ -938,26 +1019,48 @@ async function guardarCobro(pid, id) {
   const monto = parseMonto($('#cbMonto').value);
   if (!(monto > 0)) return toast('Monto inválido', true);
   const metodo = document.querySelector('#cbMetodo .chip.on').dataset.v;
-  const row = { persona_id: pid, monto, metodo, fecha: $('#cbFecha').value, nota: $('#cbNota').value.trim() || null };
-  if (!id) { row.depositado = metodo !== 'efectivo'; if (row.depositado) row.fecha_deposito = row.fecha; }
-  else if (metodo !== 'efectivo') { row.depositado = true; }
-  const q = id ? sb.from('cobros').update(row).eq('id', id).select().single() : sb.from('cobros').insert(row).select().single();
-  const data = numerico(await db(q, 'Pago guardado'));
-  if (id) Object.assign(S.cobros.find(c => c.id === id), data); else S.cobros.push(data);
+  const fecha = $('#cbFecha').value, nota = $('#cbNota').value.trim() || null, tid = +$('#cbTar').value;
+  if (!id) {
+    if (metodo === 'abono_tarjeta') await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, tid, cicloParaAbono(tid, fecha), nota);
+    else await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, null, null, nota);
+    toast('Pago guardado'); cerrarModal(); render(); return;
+  }
+  // Edición: mantener sincronizado el pago al banco enlazado
+  const c = S.cobros.find(x => x.id === id);
+  const row = { monto, metodo, fecha, nota };
+  if (metodo !== 'efectivo') row.depositado = true;
+  if (c.pago_banco_id && metodo !== 'abono_tarjeta') {
+    await db(sb.from('pagos_banco').delete().eq('id', c.pago_banco_id));
+    S.pagos = S.pagos.filter(p => p.id !== c.pago_banco_id); row.pago_banco_id = null;
+  } else if (c.pago_banco_id) {
+    const pb = S.pagos.find(p => p.id === c.pago_banco_id);
+    const upd = { monto, fecha, tarjeta_id: tid }; if (!pb || pb.tarjeta_id !== tid) upd.fecha_corte = cicloParaAbono(tid, fecha);
+    Object.assign(pb || {}, numerico(await db(sb.from('pagos_banco').update(upd).eq('id', c.pago_banco_id).select().single())));
+  } else if (metodo === 'abono_tarjeta') {
+    const pb = numerico(await db(sb.from('pagos_banco').insert({ tarjeta_id: tid, fecha_corte: cicloParaAbono(tid, fecha), fecha, monto, nota: `Abono de ${per(pid).nombre}` }).select().single()));
+    S.pagos.push(pb); row.pago_banco_id = pb.id;
+  }
+  Object.assign(c, numerico(await db(sb.from('cobros').update(row).eq('id', id).select().single(), 'Pago guardado')));
   cerrarModal(); render();
+}
+// Un abono a la tarjeta baja primero el ciclo cerrado más antiguo sin pagar; si no hay, el ciclo en curso
+function cicloParaAbono(tid, fecha) {
+  const t = tar(tid), pend = ciclosDe(t).filter(c => c.fecha_corte < fecha && c.pagadoC < c.totalC);
+  return pend.length ? pend[0].fecha_corte : calcCiclo(fecha, t).fecha_corte;
 }
 function whatsapp(pid) {
   const p = per(pid), mes = UI.mesCobro, l = liquidacion(pid, mes, S.gastos, S.cobros);
   const porT = {}; l.gastosMes.forEach(g => (porT[g.tarjeta_id] ||= []).push(g));
-  let txt = `Hola ${p.nombre}, este es tu resumen de tarjetas de ${nombreMes(mes)}:\n`;
+  let txt = `Hola ${p.nombre}, este es tu resumen de compras con tarjeta de ${nombreMes(mes)}:\n`;
   for (const [tid, gs] of Object.entries(porT)) {
-    txt += `\n*${tar(tid).nombre}* (vence ${dm(gs[0].fecha_pago)}): ${fmt(fromC(sumC(gs)))}\n`;
+    txt += `\n*${tar(tid).nombre}*: ${fmt(fromC(sumC(gs)))}\n`;
     gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).forEach(g => txt += `• ${dm(g.fecha)} ${g.descripcion}: ${fmt(g.monto)}\n`);
   }
-  if (l.anterior) txt += `\nSaldo anterior: ${fmt(l.anterior)}`;
+  txt += `\nTotal de ${nombreMes(mes).split(' ')[0]}: ${fmt(l.mes)}`;
+  if (l.anterior) txt += `\nPendiente de meses anteriores: ${fmt(l.anterior)}`;
   if (l.cobrado) txt += `\nYa pagaste: ${fmt(l.cobrado)}`;
   txt += `\n*Total a pagar: ${fmt(Math.max(l.pendiente, 0))}*`;
-  if (l.pendiente < 0) txt += `\n(Tienes ${fmt(-l.pendiente)} a favor)`;
+  if (l.aFavor) txt += `\n(Tienes ${fmt(l.aFavor)} a favor)`;
   const tel = (p.telefono || '').replace(/\D/g, '');
   window.open(`https://wa.me/${tel}?text=${encodeURIComponent(txt)}`, '_blank');
 }
@@ -974,7 +1077,8 @@ function filaGasto(g, compacto) {
     ${compacto ? '' : `<button class="icon-btn" title="Editar" onclick="mGasto(${g.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></button>`}</div>`;
 }
 function filaCobro(c) {
-  return `<div class="li"><div class="main"><div class="t">${esc(per(c.persona_id).nombre)} <span class="tag">${c.metodo}</span>${!c.depositado ? ' <span class="badge warn">por depositar</span>' : ''}</div>
+  const pb = c.pago_banco_id && S.pagos.find(p => p.id === c.pago_banco_id);
+  return `<div class="li"><div class="main"><div class="t">${esc(per(c.persona_id).nombre)} <span class="tag">${METODOS[c.metodo] || c.metodo}${pb ? ' · ' + esc(tar(pb.tarjeta_id).nombre) : ''}</span>${!c.depositado ? ' <span class="badge warn">por depositar</span>' : ''}</div>
     <div class="tiny muted">${dmy(c.fecha)}${c.nota ? ' · ' + esc(c.nota) : ''}</div></div><b class="num ok">${fmt(c.monto)}</b>
     <button class="icon-btn" title="Editar" onclick="mCobro(${c.persona_id},0,${c.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></button>
     <button class="icon-btn" title="Eliminar" onclick="borrar('cobros',${c.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`;
@@ -997,7 +1101,7 @@ function vMovimientos() {
     cuerpo = `<div class="row between"><span class="muted small">${cs.length} pago(s) recibido(s)</span><b class="num">${fmt(fromC(sumC(cs)))}</b></div><div class="list">${cs.map(filaCobro).join('') || '<div class="empty">Sin pagos recibidos.</div>'}</div>`;
   } else {
     const ps = S.pagos.filter(p => (M.mes === 'todos' || p.fecha.slice(0, 7) === M.mes) && (!M.tarjeta || p.tarjeta_id === +M.tarjeta)).sort((a, b) => b.fecha.localeCompare(a.fecha));
-    cuerpo = `<div class="row between"><span class="muted small">${ps.length} pago(s) a bancos</span><b class="num">${fmt(fromC(sumC(ps)))}</b></div><div class="list">${ps.map(p => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(p.tarjeta_id).color}"></span>${esc(tar(p.tarjeta_id).nombre)}</span><div class="main tiny muted">${dmy(p.fecha)} · ciclo ${dm(p.fecha_corte)}</div><b class="num">${fmt(p.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('pagos_banco',${p.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin pagos a bancos.</div>'}</div>`;
+    cuerpo = `<div class="row between"><span class="muted small">${ps.length} pago(s) a bancos</span><b class="num">${fmt(fromC(sumC(ps)))}</b></div><div class="list">${ps.map(p => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(p.tarjeta_id).color}"></span>${esc(tar(p.tarjeta_id).nombre)}</span><div class="main tiny muted">${dmy(p.fecha)} · ciclo ${dm(p.fecha_corte)}${p.nota ? ' · ' + esc(p.nota) : ''}</div><b class="num">${fmt(p.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('pagos_banco',${p.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin pagos a bancos.</div>'}</div>`;
   }
   $('#view').innerHTML = `
     <div class="row between wrap" style="margin-bottom:12px"><h2 style="margin:0">Movimientos</h2>
@@ -1040,8 +1144,11 @@ async function guardarGasto(id) {
   Object.assign(S.gastos.find(g => g.id === id), numerico(data)); cerrarModal(); render();
 }
 async function borrar(tabla, id) {
-  if (!confirm('¿Eliminar este registro? No se puede deshacer.')) return;
+  const enlazado = tabla === 'cobros' && (S.cobros.find(c => c.id === id) || {}).pago_banco_id;
+  if (!confirm(enlazado ? '¿Eliminar este pago? También se eliminará el abono que registró en la tarjeta.' : '¿Eliminar este registro? No se puede deshacer.')) return;
   await db(sb.from(tabla).delete().eq('id', id), 'Eliminado');
+  if (enlazado) { await db(sb.from('pagos_banco').delete().eq('id', enlazado)); S.pagos = S.pagos.filter(p => p.id !== enlazado); }
+  if (tabla === 'pagos_banco') S.cobros.forEach(c => { if (c.pago_banco_id === id) c.pago_banco_id = null; });
   const k = { gastos: 'gastos', cobros: 'cobros', pagos_banco: 'pagos', tiendas: 'tiendas', recurrentes: 'recurrentes' }[tabla];
   S[k] = S[k].filter(x => x.id !== id); cerrarModal(); render();
 }
