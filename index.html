@@ -352,6 +352,8 @@ function adivinarCategoria(desc, tienda) {
   if (/membres/.test(d)) return 'Membresía';
   if (/inter[eé]s/.test(d)) return 'Intereses';
   if (/at[uú]n|huevo/.test(d)) return 'Atún y huevo';
+  // Cuidado personal antes que limpieza: "jabón cerave" no es limpieza de la casa
+  if (/cerave|dove|nivea|protex|rexona|neutrogena|eucerin|roche|vichy|bioderma|garnier|loreal|l'or[eé]al|elvive|pantene|head ?& ?shoulders|sedal|clear\b|shampoo|champ[uú]|acondicionador|crema|serum|s[eé]rum|desodorante|antitranspirante|colonia|perfume|bloqueador|protector solar|talco|maquillaje|labial|rasurad|afeitar|gillette|cepillo dental|hilo dental|enjuague bucal/.test(d)) return 'Cuidado personal';
   if (/jab[oó]n|papel|lej[ií]a|leg[ií]a|detergente|suaviz|suavit|pato|quitaman|ayud[ií]n|bolsa.*basura|limpiador|sapolio|poett|kolino|esponja|bol[ií]var|\bboli\b|ariel|opal|\bace\b|clorox|lavavajilla|pinesol|glade|harpic|vanish/.test(d)) return 'Limpieza';
   if (/spotify|netflix|claude|youtube|disney|max\b|prime/.test(d)) return 'Suscripciones';
   if (/internet|celular|movistar|entel|claro|bitel|luz|enel|agua|sedapal|gas\b|calidda|c[aá]lidda/.test(d)) return 'Servicios';
