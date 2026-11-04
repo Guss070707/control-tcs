@@ -1199,8 +1199,9 @@ function actualizarTotal() {
   if (error) { info.innerHTML = `<span class="bad">${esc(error)}</span>`; return; }
   const partes = Object.keys(por).map(id => {
     const p = pagos[id] || 0, resta = por[id] - p;
-    if (esTit(id)) return p ? `tú depositas ${fmt(fromC(p))}` : '';
-    return `${esc(per(id).nombre)} ${fmt(fromC(p))}` + (resta > 0 ? ` <span class="warn">(queda debiendo ${fmt(fromC(resta))})</span>` : '');
+    const extra = resta < 0 ? ` <span class="ok">(${fmt(fromC(-resta))} a favor, se descuenta de lo próximo)</span>` : '';
+    if (esTit(id)) return p ? `tú depositas ${fmt(fromC(p))}${extra}` : '';
+    return `${esc(per(id).nombre)} ${fmt(fromC(p))}` + (resta > 0 ? ` <span class="warn">(queda debiendo ${fmt(fromC(resta))})</span>` : extra);
   }).filter(Boolean);
   if (!partes.length) { info.innerHTML = '<span class="muted">No se registrará ningún pago.</span>'; return; }
   info.innerHTML = `<span class="ok">Se registrará como pagado: ${partes.join(' · ')}</span>`
@@ -1221,7 +1222,7 @@ function pintarMontosPago(por) {
   }
   ids.forEach(pid => {
     const de = box.querySelector(`[data-de="${pid}"]`), inp = box.querySelector(`input[data-pid="${pid}"]`);
-    if (de) de.textContent = esTit(pid) ? `de ${fmt(fromC(por[pid]))} tuyos · vacío = nada` : `de ${fmt(fromC(por[pid]))} · vacío = todo`;
+    if (de) de.textContent = esTit(pid) ? `de ${fmt(fromC(por[pid]))} tuyos · vacío = nada · pon lo que entró al banco` : `de ${fmt(fromC(por[pid]))} · vacío = todo · si redondeó, pon lo que entró al banco`;
     if (inp) inp.placeholder = esTit(pid) ? '0.00' : fromC(por[pid]).toFixed(2);
   });
 }
@@ -1234,7 +1235,6 @@ function montosPagados(por) {
     if (!txt) { if (!tit || +pid !== tit.id) pagos[pid] = totalC; continue; } // titular vacío = no abonó
     const v = parseMonto(txt);
     if (isNaN(v) || v < 0) return { error: `Monto pagado de ${per(pid).nombre} no es válido` };
-    if (toC(v) > totalC) return { error: `${per(pid).nombre} no puede pagar más de lo suyo (${fmt(fromC(totalC))}). Si te dio de más, regístralo en Cobrar.` };
     if (toC(v) > 0) pagos[pid] = toC(v);
   }
   return { pagos };
