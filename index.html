@@ -1433,6 +1433,7 @@ function tarjetaPersona(p, l, mes) {
     <div class="row wrap" style="margin-top:12px">
       <button class="btn sm pri" onclick="mCobro(${p.id}, ${Math.max(l.pendiente, 0)})">Registrar pago</button>
       <button class="btn sm" onclick="whatsapp(${p.id})">Enviar por WhatsApp</button>
+      <button class="btn sm" onclick="pdfEstadoCuenta(${p.id})">Estado de cuenta (PDF)</button>
     </div></div>`;
 }
 // desdeGasto: { tarjeta_id, fecha_corte } cuando se registra el pago de un gasto puntual
@@ -1524,6 +1525,117 @@ async function guardarCobro(pid, id) {
     await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: pid, monto, cobro_id: id, nota: `Pago de ${per(pid).nombre}` });
   }
   cerrarModal(); render();
+}
+// ============================================================
+// ESTADO DE CUENTA EN PDF (por persona y mes)
+// ============================================================
+let _pdfLib = null;
+function cargarPDF() {
+  if (_pdfLib) return _pdfLib;
+  const js = src => new Promise((ok, mal) => { const e = document.createElement('script'); e.src = src; e.onload = ok; e.onerror = () => mal(new Error('No se pudo cargar ' + src)); document.head.appendChild(e); });
+  _pdfLib = js('https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js')
+    .then(() => js('https://cdn.jsdelivr.net/npm/jspdf-autotable@5.0.8/dist/jspdf.plugin.autotable.min.js'))
+    .then(() => window.jspdf)
+    .catch(e => { _pdfLib = null; throw e; });
+  return _pdfLib;
+}
+const pdfTxt = s => String(s ?? '').replace(/−/g, '-').replace(/[✓✔]/g, '').replace(/[^\x00-\xFF—–’‘“”•…]/g, '');
+const pdfMonto = v => pdfTxt(fmt(v));
+async function pdfEstadoCuenta(pid) {
+  const p = per(pid), mes = UI.mesCobro || hoyStr().slice(0, 7), nMes = nombreMes(mes);
+  const ini = mes + '-01', fin = ymd(+mes.slice(0, 4), +mes.slice(5, 7), 31), h = hoyStr();
+  setSync('busy');
+  let lib;
+  try { lib = await cargarPDF(); } catch (e) { setSync('err'); return toast('No se pudo cargar el generador de PDF. Revisa tu conexión.', true); }
+  setSync('ok');
+  const l = liquidacion(pid, mes, S.gastos, S.cobros);
+  const dep = porTarjetaPendiente(pid, mes);
+  const doc = new lib.jsPDF({ unit: 'mm', format: 'a4' });
+  const tabla = o => (doc.autoTable ? doc.autoTable(o) : window.jspdf_autotable.autoTable(doc, o), doc.lastAutoTable.finalY);
+  const W = doc.internal.pageSize.getWidth(), M = 14, AZUL = [37, 84, 180], GRIS = [110, 116, 135], TINTA = [25, 30, 45];
+  // Encabezado
+  doc.setFillColor(...AZUL); doc.rect(0, 0, W, 30, 'F');
+  doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text('Estado de cuenta', M, 14);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.text(pdfTxt(`Compras con tarjeta de crédito · ${nMes}`), M, 21);
+  doc.setFontSize(9); doc.text(pdfTxt(`Generado el ${dmy(h)}`), W - M, 21, { align: 'right' });
+  doc.setTextColor(...TINTA); doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.text(pdfTxt(p.nombre), M, 42);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...GRIS);
+  doc.text(pdfTxt(`Periodo: del ${dmy(ini)} al ${dmy(fin)}`), M, 48);
+  // Resumen
+  let y = 54;
+  const filasRes = [];
+  if (l.anterior) filasRes.push(['Pendiente de meses anteriores', pdfMonto(l.anterior)]);
+  filasRes.push([pdfTxt(`Gastos de ${nMes.split(' ')[0]}`), pdfMonto(l.mes)]);
+  filasRes.push([pdfTxt(`Pagos aplicados a ${nMes.split(' ')[0]}`), l.cobrado ? '-' + pdfMonto(l.cobrado) : pdfMonto(0)]);
+  y = tabla({ startY: y, margin: { left: M, right: M }, theme: 'plain', body: filasRes,
+    styles: { fontSize: 10, cellPadding: { top: 1.6, bottom: 1.6, left: 2, right: 2 }, textColor: TINTA },
+    columnStyles: { 1: { halign: 'right', cellWidth: 45 } } });
+  doc.setFillColor(...(l.pendiente > 0 ? [255, 244, 222] : [226, 246, 236])); doc.roundedRect(M, y + 2, W - 2 * M, 13, 2, 2, 'F');
+  doc.setTextColor(...TINTA); doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
+  doc.text(l.pendiente > 0 ? 'Total a pagar hoy' : (l.aFavor ? 'Saldo a favor' : 'Al día'), M + 4, y + 10.5);
+  doc.text(pdfMonto(l.pendiente > 0 ? l.pendiente : l.aFavor), W - M - 4, y + 10.5, { align: 'right' });
+  y += 20;
+  // Dónde depositar
+  const porCuenta = dep.lista.filter(r => r.c > 0), deMas = dep.lista.filter(r => r.c < 0);
+  if (l.pendiente > 0 && porCuenta.length) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text('Dónde depositar', M, y + 4);
+    const filas = porCuenta.map(r => [pdfTxt(cuentaNombre(tar(r.tid))), pdfTxt(tar(r.tid).nombre), pdfMonto(fromC(r.c))]);
+    deMas.forEach(r => filas.push([pdfTxt(cuentaNombre(tar(r.tid))), pdfTxt(`${tar(r.tid).nombre} (depositaste de más)`),
+      { content: '-' + pdfMonto(fromC(-r.c)), styles: { textColor: [22, 130, 80] } }]));
+    const totC = dep.lista.reduce((a, r) => a + r.c, 0);
+    y = tabla({ startY: y + 6, margin: { left: M, right: M }, head: [['Cuenta', 'Tarjeta que paga', 'Monto']], body: filas,
+      foot: deMas.length ? [[{ content: 'Total', colSpan: 2, styles: { halign: 'right' } }, pdfMonto(fromC(totC))]] : undefined,
+      headStyles: { fillColor: AZUL, fontSize: 9 }, footStyles: { fillColor: [245, 247, 251], textColor: TINTA, fontStyle: 'bold' },
+      styles: { fontSize: 10 }, columnStyles: { 2: { halign: 'right', fontStyle: 'bold' } } }) + 2;
+    if (deMas.length) {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
+      doc.text(doc.splitTextToSize(pdfTxt('Lo depositado de más en una cuenta ya está descontado del total. Si depositas solo el total, avisa para pasar ese saldo a la cuenta que falta.'), W - 2 * M), M, y + 3);
+      y += 6;
+    }
+    if (dep.yapeC) {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
+      doc.text(doc.splitTextToSize(pdfTxt(`Ya se descontó ${pdfMonto(fromC(dep.yapeC))} que pagaste por Yape/efectivo/otro.`), W - 2 * M), M, y + 3);
+      y += 5;
+    }
+    doc.setTextColor(...TINTA); y += 4;
+  }
+  // Gastos del mes por tarjeta
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...TINTA);
+  doc.text(pdfTxt(`Gastos de ${nMes}`), M, y + 4); y += 6;
+  const porT = {}; l.gastosMes.forEach(g => (porT[g.tarjeta_id] ||= []).push(g));
+  if (!l.gastosMes.length) { doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...GRIS); doc.text('Sin gastos en este mes.', M, y + 4); y += 8; }
+  for (const [tid, gs] of Object.entries(porT)) {
+    gs.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.id - b.id);
+    y = tabla({ startY: y + 2, margin: { left: M, right: M }, head: [[{ content: pdfTxt(`${tar(tid).nombre}  ·  ${gs.length} gasto(s)`), colSpan: 4 }], ['Fecha', 'Tienda', 'Producto', 'Monto']],
+      body: gs.map(g => [dm(g.fecha), pdfTxt(g.tienda || ''), pdfTxt(g.descripcion + (g.nota ? ` (${g.nota})` : '')), pdfMonto(g.monto)]),
+      foot: [[{ content: 'Subtotal', colSpan: 3, styles: { halign: 'right' } }, pdfMonto(fromC(sumC(gs)))]],
+      headStyles: { fillColor: [232, 236, 245], textColor: TINTA, fontSize: 9 }, footStyles: { fillColor: [245, 247, 251], textColor: TINTA, fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 1.8 }, columnStyles: { 0: { cellWidth: 16 }, 1: { cellWidth: 34 }, 3: { halign: 'right', cellWidth: 28 } } }) + 2;
+  }
+  // Pagos y depósitos registrados (desde el inicio del mes hasta hoy)
+  const cs = S.cobros.filter(c => c.persona_id === pid && c.fecha >= ini).sort((a, b) => a.fecha.localeCompare(b.fecha));
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...TINTA);
+  if (y > 250) { doc.addPage(); y = 16; }
+  doc.text(pdfTxt(`Pagos registrados (del ${dmy(ini)} a hoy)`), M, y + 6); y += 8;
+  if (cs.length) {
+    y = tabla({ startY: y, margin: { left: M, right: M }, head: [['Fecha', 'Forma', 'Cuenta', 'Monto']],
+      body: cs.map(c => { const d = S.depositos.find(x => x.cobro_id === c.id); return [dmy(c.fecha), pdfTxt(d ? 'Depósito' : (METODOS[c.metodo] || c.metodo)), pdfTxt(d ? cuentaNombre(tar(d.tarjeta_id)) : '—'), pdfMonto(c.monto)]; }),
+      foot: [[{ content: 'Total pagado', colSpan: 3, styles: { halign: 'right' } }, pdfMonto(fromC(sumC(cs)))]],
+      headStyles: { fillColor: [232, 236, 245], textColor: TINTA, fontSize: 9 }, footStyles: { fillColor: [245, 247, 251], textColor: TINTA, fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 1.8 }, columnStyles: { 3: { halign: 'right', cellWidth: 28 } } }) + 4;
+  } else { doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...GRIS); doc.text('Aún no hay pagos registrados en este periodo.', M, y + 4); y += 8; }
+  // Notas y pie
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
+  if (y > 280) { doc.addPage(); y = 16; }
+  doc.text(doc.splitTextToSize(pdfTxt('Los pagos se aplican primero a la deuda más antigua. Deposita en la cuenta indicada y avisa el monto exacto.'), W - 2 * M), M, y + 4);
+  const n = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(...GRIS); doc.text(pdfTxt(`Control TCs · página ${i} de ${n}`), W / 2, doc.internal.pageSize.getHeight() - 8, { align: 'center' }); }
+  const nombre = `Estado_de_cuenta_${norm(p.nombre).replace(/[^a-z0-9]+/g, '_')}_${MESES[+mes.slice(5, 7) - 1]}_${mes.slice(0, 4)}.pdf`;
+  const blob = doc.output('blob'), file = new File([blob], nombre, { type: 'application/pdf' });
+  if (matchMedia('(pointer:coarse)').matches && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: `Estado de cuenta ${p.nombre}`, text: `Estado de cuenta de ${nMes}` }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  doc.save(nombre); toast('PDF descargado');
 }
 function whatsapp(pid) {
   const p = per(pid), mes = UI.mesCobro, l = liquidacion(pid, mes, S.gastos, S.cobros);
