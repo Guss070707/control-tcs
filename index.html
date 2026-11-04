@@ -1077,7 +1077,9 @@ function vRegistrar() {
 
     <div class="savebar"><div class="grow"><div class="tiny muted" id="rResumen"></div><div class="amount num" id="rTotal"></div></div>
       <button class="btn ghost" onclick="limpiarForm()">Limpiar</button>
-      <button class="btn pri" id="btnGuardar" onclick="guardarCompra()">Guardar</button></div>`;
+      <button class="btn pri" id="btnGuardar" onclick="guardarCompra()">Guardar</button></div>
+    <div id="rHist"></div>`;
+  pintarHistorial();
   $('#rFecha').addEventListener('change', e => F.fecha = e.target.value);
   $('#rTienda').addEventListener('input', e => { F.tienda = e.target.value; tiendaElegida(); });
   pintarTarjetas(); pintarItems();
@@ -1300,8 +1302,76 @@ async function guardarCompra() {
       const { data: nt } = await sb.from('tiendas').insert({ nombre: tn, tarjeta_id: F.tarjeta_id }).select().single();
       if (nt) S.tiendas.push(nt);
     }
+    UI.recien = boleta || ('g' + data[0].id); UI.recienT = Date.now(); UI.histN = 5;
     F = nuevoForm(); vRegistrar();
   } catch (e) { $('#btnGuardar').disabled = false; }
+}
+// Últimos registros: las compras guardadas más recientemente (por hora de registro, no por fecha de compra)
+const quienRegistro = email => { const u = USUARIOS.find(x => x.email === email); return u ? u.nombre : (email || '').split('@')[0]; };
+function horaRegistro(iso) {
+  if (!iso) return '';
+  const d = new Date(iso), hoy = hoyStr(), dia = ymd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  const hh = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return (dia === hoy ? 'hoy' : dia === addDays(hoy, -1) ? 'ayer' : dmy(dia)) + ' a las ' + hh;
+}
+function pagosDeRegistro(gr) {
+  // Pagos que se guardaron junto con la compra ("¿Ya te lo pagaron?"): misma fecha, nota "Pagado al registrar…", creados casi a la vez
+  const t0 = Date.parse(gr.creado), cerca = x => x.fecha === gr.fecha && /^Pagado al registrar/.test(x.nota || '') && Math.abs(Date.parse(x.creado) - t0) < 120000;
+  const cobros = S.cobros.filter(cerca);
+  const propios = S.depositos.filter(d => !d.cobro_id && cerca(d));
+  return [...cobros.map(c => { const d = S.depositos.find(x => x.cobro_id === c.id); return { pid: c.persona_id, monto: c.monto, como: d ? 'depositó en ' + cuentaNombre(tar(d.tarjeta_id)) : (METODOS[c.metodo] || c.metodo) + (c.depositado ? '' : ' · por depositar') }; }),
+          ...propios.map(d => ({ pid: d.persona_id, monto: d.monto, como: 'depósito propio en ' + cuentaNombre(tar(d.tarjeta_id)) }))];
+}
+function pintarHistorial() {
+  const box = $('#rHist'); if (!box) return;
+  const n = UI.histN || 5, grupos = new Map();
+  for (const g of S.gastos) {
+    if (g.recurrente_id) continue;
+    const k = g.boleta_id || ('g' + g.id);
+    if (!grupos.has(k)) grupos.set(k, { k, items: [], creado: g.creado, maxId: g.id });
+    const gr = grupos.get(k); gr.items.push(g);
+    if ((g.creado || '') > (gr.creado || '')) gr.creado = g.creado;
+    if (g.id > gr.maxId) gr.maxId = g.id;
+  }
+  const todos = [...grupos.values()].sort((a, b) => (b.creado || '').localeCompare(a.creado || '') || b.maxId - a.maxId);
+  const lista = todos.slice(0, n), h = hoyStr();
+  if (!lista.length) { box.innerHTML = ''; return; }
+  const html = lista.map(gr => {
+    const its = gr.items.sort((a, b) => a.id - b.id), g0 = its[0], t = tar(g0.tarjeta_id);
+    gr.fecha = g0.fecha;
+    const tot = sumC(its), recien = UI.recien === gr.k && Date.now() - (UI.recienT || 0) < 600000;
+    const titulo = g0.tienda ? esc(g0.tienda) : esc(g0.descripcion);
+    const por = {}; its.forEach(x => por[x.persona_id] = (por[x.persona_id] || 0) + toC(x.monto));
+    const quienes = Object.entries(por).map(([pid, c]) => `<span style="white-space:nowrap"><span class="dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${per(pid).color}"></span> ${esSobre(per(pid)) ? 'Sobre ' : ''}${esc(per(pid).nombre)} <b class="num">${fmt(fromC(c))}</b></span>`).join(' · ');
+    const ciclos = [...new Set(its.map(x => x.fecha_corte + '|' + x.fecha_pago))];
+    const ciclo = ciclos.length > 1 ? '<span class="warn">Los ítems quedaron en ciclos distintos</span>'
+      : g0.fecha_corte < h ? `Ya facturado: estado de cuenta del ${dmy(g0.fecha_corte)} · pagar hasta ${dmy(g0.fecha_pago)}`
+      : `Aún no facturado: entra al estado de cuenta del ${dmy(g0.fecha_corte)} · pagar hasta ${dmy(g0.fecha_pago)}`;
+    const pagos = pagosDeRegistro(gr), deOtros = its.some(x => !esTit(x.persona_id));
+    const filas = its.map(g => { const p = per(g.persona_id); return `<div class="li" style="cursor:pointer" onclick="mGasto(${g.id})" title="Editar">
+        <span class="dot" style="width:9px;height:9px;border-radius:50%;background:${p.color};flex:none"></span>
+        <div class="main"><div class="t">${esc(g.descripcion)}</div>
+        <div class="tiny muted t">${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)} · ${esc(g.categoria)}${g.nota ? ' · ' + esc(g.nota) : ''}</div></div>
+        <b class="num ${g.monto < 0 ? 'ok' : ''}">${fmt(g.monto)}</b></div>`; }).join('');
+    return `<details class="compra" ${recien || gr === lista[0] ? 'open' : ''} style="${recien ? 'border-left:3px solid var(--ok,#3fbf8a);padding-left:6px' : ''}">
+      <summary><span class="c-f">${dm(g0.fecha)}</span>
+        <span class="c-t"><span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${t.color}"></span> ${esc(t.nombre)} · ${titulo}${its.length > 1 ? ` <span class="muted">· ${its.length} productos</span>` : g0.tienda ? ` <span class="muted">· ${esc(g0.descripcion)}</span>` : ''}</span>
+        ${recien ? '<span class="badge ok">Recién guardado</span>' : ''}<b class="num c-m">${fmt(fromC(tot))}</b></summary>
+      <div style="padding:6px 2px 10px">
+        <div class="tiny muted">Registrado ${horaRegistro(gr.creado)}${g0.creado_por ? ' por ' + esc(quienRegistro(g0.creado_por)) : ''} · compra del ${dmy(g0.fecha)} con ${esc(t.nombre)}</div>
+        <div class="tiny muted" style="margin-top:2px">${ciclo}</div>
+        <div class="list" style="margin-top:6px">${filas}</div>
+        <div class="tiny" style="margin-top:6px">${quienes}</div>
+        ${pagos.length ? `<div class="tiny ok" style="margin-top:4px">Pago registrado: ${pagos.map(x => `${esTit(x.pid) ? 'Tú' : esc(per(x.pid).nombre)} ${fmt(x.monto)} (${esc(x.como)})`).join(' · ')}</div>`
+          : deOtros ? '<div class="tiny muted" style="margin-top:4px">Sin pago registrado: se cobra después</div>' : ''}
+      </div></details>`;
+  }).join('');
+  box.innerHTML = `<div class="card" style="margin-top:14px">
+    <div class="row between wrap" style="gap:2px 10px"><h3 style="margin:0;white-space:nowrap">Últimos registros</h3><span class="tiny muted">Toca un producto para corregirlo</span></div>
+    <div style="margin-top:6px">${html}</div>
+    <div class="row wrap" style="margin-top:10px">
+      ${todos.length > n ? `<button class="btn sm" onclick="UI.histN=${n + 10};pintarHistorial()">Ver más</button>` : ''}
+      <button class="btn sm ghost" onclick="irA('movimientos')">Ver todo en Movimientos</button></div></div>`;
 }
 
 // ============================================================
