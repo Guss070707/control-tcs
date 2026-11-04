@@ -721,12 +721,12 @@ function cuentaHtml(t) {
   if (!e.ult) {
     cuerpo = `<div class="small warn" style="margin-top:4px">Anota el saldo actual de tu cuenta ${n} para empezar a controlarla.</div>`;
   } else {
-    const sobra = e.esperadoC - Math.max(e.deudaC, 0);
+    const porDep = porDepositarC(t.id), dif = e.esperadoC + porDep - Math.max(e.deudaC, 0);
     cuerpo = `<div class="row between wrap" style="margin-top:2px"><div>
         <div class="num" style="font-weight:600">${fmt(fromC(e.esperadoC))}</div>
         <div class="tiny muted">Último saldo real ${fmt(e.ult.saldo)} el ${dm(e.ult.fecha)}${e.esperadoC !== toC(e.ult.saldo) ? ' + depósitos − pagos desde entonces' : ''}</div></div>
         <div class="right"><div class="tiny muted">Debes a la tarjeta</div><div class="num">${fmt(fromC(Math.max(e.deudaC, 0)))}</div></div></div>
-      <div class="small" style="margin-top:6px">${sobra >= 0 ? `<span class="ok">✓ Alcanza para pagar todo lo registrado${sobra ? ` (sobran ${fmt(fromC(sobra))})` : ''}</span>` : `<span class="warn">Falta depositar ${fmt(fromC(-sobra))}</span>`}</div>
+      <div class="small" style="margin-top:6px">Por depositar <b class="num">${fmt(fromC(porDep))}</b> · Diferencia ${dif === 0 ? '<span class="badge ok">✓ Cuadra</span>' : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span> <span class="tiny muted">falta registrar algo</span>`}</div>
       ${e.difUltC !== null && e.difUltC !== 0 ? `<div class="tiny bad" style="margin-top:4px">Al anotar el saldo del ${dm(e.ult.fecha)} había ${fmt(fromC(Math.abs(e.difUltC)))} ${e.difUltC > 0 ? 'más' : 'menos'} de lo esperado: falta registrar un movimiento.</div>`
         : e.difUltC === 0 ? '<div class="tiny ok" style="margin-top:4px">El último saldo real cuadró con tus registros.</div>' : ''}`;
   }
@@ -753,29 +753,35 @@ function lineaHtml(t, compacto) {
 function resumenCuentas() {
   const ts = activos(S.tarjetas);
   if (!ts.length) return '';
-  let totC = 0, deudaTotC = 0, sinSaldo = 0;
+  let totC = 0, porDepTotC = 0, deudaTotC = 0, difTotC = 0, sinSaldo = 0, descuadres = 0;
   const filas = ts.map(t => {
     const e = estadoCuenta(t), deuda = Math.max(e.deudaC, 0);
     deudaTotC += deuda;
     const nombre = `<span class="tag"><span class="dot" style="background:${t.color}"></span>${esc(cuentaNombre(t))}</span>`;
+    const izq = `<div class="main">${nombre}${e.difUltC ? ' <span class="badge bad" title="El último saldo real no cuadró con tus registros">revisar saldo</span>' : ''}
+      <div class="tiny muted" style="margin-top:3px">Debes a la tarjeta <b class="num" style="color:var(--text)">${fmt(fromC(deuda))}</b>${e.ult ? ` · saldo real ${fmt(e.ult.saldo)} el ${dm(e.ult.fecha)}` : ''}</div>${lineaHtml(t, true)}</div>`;
     if (!e.ult) {
       sinSaldo++;
-      return `<div class="li"><div class="main">${nombre}<div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))}</div>${lineaHtml(t, true)}</div>
-        <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></div>`;
+      return `<div class="li">${izq}<button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></div>`;
     }
-    totC += e.esperadoC;
-    const dif = e.esperadoC - deuda;
-    return `<div class="li"><div class="main">${nombre}${e.difUltC ? ' <span class="badge bad" title="El último saldo real no cuadró con tus registros">revisar</span>' : ''}
-        <div class="tiny muted" style="margin-top:3px">Debes a la tarjeta ${fmt(fromC(deuda))} · real ${fmt(e.ult.saldo)} el ${dm(e.ult.fecha)}</div>${lineaHtml(t, true)}</div>
-      <div class="right"><b class="num" style="font-size:16px">${fmt(fromC(e.esperadoC))}</b>
-        <div style="margin-top:3px">${dif >= 0 ? `<span class="badge ok">Sobra ${fmt(fromC(dif))}</span>` : `<span class="badge warn">Falta ${fmt(fromC(-dif))}</span>`}</div></div></div>`;
+    const porDep = porDepositarC(t.id), dif = e.esperadoC + porDep - deuda;
+    totC += e.esperadoC; porDepTotC += porDep; difTotC += dif; if (dif !== 0) descuadres++;
+    return `<div class="li">${izq}
+      <table class="tiny num" style="border-collapse:collapse;min-width:170px"><tbody>
+        <tr><td class="muted" style="padding:1px 8px 1px 0">En cuenta</td><td class="right"><b style="font-size:14px">${fmt(fromC(e.esperadoC))}</b></td></tr>
+        <tr><td class="muted" style="padding:1px 8px 1px 0">Por depositar</td><td class="right">${fmt(fromC(porDep))}</td></tr>
+        <tr><td class="muted" style="padding:3px 8px 1px 0;border-top:1px solid var(--line)">Diferencia</td><td class="right" style="padding-top:3px;border-top:1px solid var(--line)">${dif === 0
+          ? '<span class="badge ok">✓ Cuadra</span>'
+          : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}" title="${dif < 0 ? 'Falta dinero: algo salió de la cuenta o un depósito no se registró' : 'Sobra dinero: hay un depósito o gasto que no está registrado'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span>`}</td></tr>
+      </tbody></table></div>`;
   }).join('');
   const conLinea = ts.map(lineaInfo).filter(l => l.lineaC !== null);
   const dispTotC = conLinea.reduce((a, l) => a + l.dispC, 0);
   return `<div class="card" style="margin-top:12px"><div class="row between wrap"><h3 style="margin:0">Cuentas TC</h3>
-      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b>${conLinea.length ? ` · Línea disponible <b class="num">${fmt(fromC(dispTotC))}</b>` : ''}</div></div>
+      <div class="small">En cuentas <b class="num">${fmt(fromC(totC))}</b> · Por depositar <b class="num">${fmt(fromC(porDepTotC))}</b> · Debes a tarjetas <b class="num">${fmt(fromC(deudaTotC))}</b>${conLinea.length ? ` · Línea disponible <b class="num">${fmt(fromC(dispTotC))}</b>` : ''}</div></div>
+    ${descuadres ? `<div class="small bad" style="margin-top:6px">${descuadres} cuenta(s) no cuadran (diferencia total ${difTotC > 0 ? '+' : '−'}${fmt(fromC(Math.abs(difTotC)))}): falta registrar algún movimiento.</div>` : ''}
     <div class="list" style="margin-top:4px">${filas}</div>
-    <div class="tiny muted" style="margin-top:6px">Saldo = último saldo real anotado + depósitos − pagos a la tarjeta desde entonces.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div></div>`;
+    <div class="tiny muted" style="margin-top:6px">Debe cumplirse: <b>En cuenta + Por depositar = Debes a la tarjeta</b>. “Por depositar” es lo que todos (personas, sobres y tú) aún no depositan en esa cuenta. Si la diferencia no es cero, hay un movimiento sin registrar: un depósito, un cobro del banco o un gasto.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div></div>`;
 }
 function mDeposito(tid, sugerido) {
   const t = tar(tid), tit = titular();
@@ -1231,15 +1237,21 @@ function vCobrar() {
 function porTarjetaPendiente(pid, mes) {
   const fin = ymd(+mes.slice(0, 4), +mes.slice(5, 7), 31);
   const gs = S.gastos.filter(g => g.persona_id === pid && g.fecha <= fin);
-  const deps = S.depositos.filter(d => d.persona_id === pid && d.cobro_id);
+  const deps = S.depositos.filter(d => d.persona_id === pid);  // incluye tus depósitos propios (sin cobro)
   const res = {};
   for (const g of gs) { const r = (res[g.tarjeta_id] ||= { tid: g.tarjeta_id, c: 0, primera: g.fecha }); r.c += toC(g.monto); if (g.fecha < r.primera) r.primera = g.fecha; }
   for (const d of deps) { const r = (res[d.tarjeta_id] ||= { tid: d.tarjeta_id, c: 0, primera: d.fecha }); r.c -= toC(d.monto); }
-  let sinCuentaC = sumC(S.cobros.filter(c => c.persona_id === pid)) - sumC(deps);
+  let sinCuentaC = sumC(S.cobros.filter(c => c.persona_id === pid)) - sumC(deps.filter(d => d.cobro_id));
   const lista = Object.values(res).sort((a, b) => a.primera.localeCompare(b.primera));
   const yapeC = sinCuentaC;
   for (const r of lista) { if (sinCuentaC <= 0) break; if (r.c > 0) { const a = Math.min(r.c, sinCuentaC); r.c -= a; sinCuentaC -= a; } }
   return { lista: lista.filter(r => r.c !== 0), yapeC: Math.max(yapeC, 0) };
+}
+// Lo que todos (personas, sobres y tú) aún deben depositar en la cuenta TC de una tarjeta, hasta hoy
+function porDepositarC(tid) {
+  let c = 0;
+  for (const p of S.personas) { const r = porTarjetaPendiente(p.id, '9999-12').lista.find(x => x.tid === tid); if (r) c += r.c; }
+  return c;
 }
 // Tu parte del mes, separada por tarjeta, para que deposites lo tuyo en cada cuenta TC
 function tusGastos(tit, mes, propioC) {
