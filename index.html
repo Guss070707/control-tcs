@@ -1418,6 +1418,8 @@ function mGasto(id) {
       <div class="field"><label class="l">Persona</label><select class="f" id="gPer">${S.personas.map(p => `<option value="${p.id}" ${p.id === g.persona_id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select></div></div>
     <div class="field"><label class="l">Categoría</label><select class="f" id="gCat">${CATEGORIAS.map(c => `<option ${c === g.categoria ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="field"><label class="l">Nota</label><input class="f" id="gNota" value="${esc(g.nota || '')}"></div>
+    ${(() => { const n = g.boleta_id ? S.gastos.filter(x => x.boleta_id === g.boleta_id).length : 1; return n > 1 ? `<label class="row small" style="margin-bottom:12px;cursor:pointer"><input type="checkbox" id="gBoleta"> Aplicar la fecha y la tarjeta a los ${n} ítems de esta boleta</label>
+      <div class="tiny muted" style="margin:-6px 0 12px">Útil si el banco cobró la compra en otro ciclo (por ejemplo, compraste un día antes del corte y la procesó después): pon la fecha en que el banco la procesó.</div>` : ''; })()}
     <div class="tiny muted" style="margin-bottom:12px">Ciclo: corte ${dmy(g.fecha_corte)} · pago ${dmy(g.fecha_pago)}${g.creado_por ? ' · registrado por ' + esc(g.creado_por) : ''}</div>
     ${titular() && g.persona_id !== titular().id && g.monto > 0 ? `<div class="paste-box" style="margin-bottom:12px"><div class="small" style="margin-bottom:8px">¿${esc(per(g.persona_id).nombre)} ya te pagó esto o lo depositó en la cuenta TC?</div>
       <button class="btn sm pri" onclick="pagoDeGasto(${g.id})">Registrar pago de este gasto</button></div>` : ''}
@@ -1433,7 +1435,14 @@ async function guardarGasto(id) {
   const tid = +$('#gTar').value, fecha = $('#gFecha').value;
   const row = { descripcion: desc, monto, fecha, tarjeta_id: tid, persona_id: +$('#gPer').value, categoria: $('#gCat').value, nota: $('#gNota').value.trim() || null, ...calcCiclo(fecha, tar(tid)) };
   const data = await db(sb.from('gastos').update(row).eq('id', id).select().single(), 'Gasto actualizado');
-  Object.assign(S.gastos.find(g => g.id === id), numerico(data)); cerrarModal(); render();
+  const g = S.gastos.find(x => x.id === id); Object.assign(g, numerico(data));
+  // Fecha y tarjeta para toda la boleta
+  if ($('#gBoleta') && $('#gBoleta').checked && g.boleta_id) {
+    const comun = { fecha, tarjeta_id: tid, ...calcCiclo(fecha, tar(tid)) };
+    await db(sb.from('gastos').update(comun).eq('boleta_id', g.boleta_id), 'Boleta actualizada');
+    S.gastos.filter(x => x.boleta_id === g.boleta_id).forEach(x => Object.assign(x, comun));
+  }
+  cerrarModal(); render();
 }
 async function borrar(tabla, id) {
   // Un depósito que es el pago de alguien se borra junto con ese pago (y viceversa)
