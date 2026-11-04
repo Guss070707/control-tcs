@@ -46,6 +46,10 @@ nav.tabs svg{width:20px;height:20px}
   nav.tabs button{flex-direction:column;gap:2px;font-size:11px;padding:4px 6px;flex:1}
   nav.tabs button.on{background:none;color:var(--accent)}
   .top-inner .spacer{flex:1}
+  .top-inner{gap:6px;padding:10px 12px}
+  .btn{white-space:normal!important}
+  .sync{font-size:0;width:10px;height:10px;padding:0;background:var(--ok)!important}
+  .sync.busy{background:var(--warn)!important} .sync.err{background:var(--bad)!important}
 }
 @media (min-width:761px){ body{padding-bottom:32px} .top-inner .spacer{flex:1} }
 
@@ -57,6 +61,7 @@ h2{font-size:20px;margin:4px 0 14px} h3{font-size:16px;margin:0 0 10px}
 @media (max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}}
 .kpi .lbl{font-size:12px;color:var(--muted)} .kpi .val{font-size:22px;font-weight:700;margin-top:2px}
 .cols2{grid-template-columns:1fr 1fr} @media (max-width:900px){.cols2{grid-template-columns:1fr}}
+.grid > *{min-width:0}
 
 /* Controles */
 .btn{background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:9px 14px;cursor:pointer;white-space:nowrap}
@@ -133,7 +138,7 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .money.der{display:block} .money.der input.f{text-align:right!important}
 .filters{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
 @media (max-width:760px){.filters{grid-template-columns:1fr 1fr}}
-.seg{display:inline-flex;background:#11162a;border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px}
+.seg{display:inline-flex;flex-wrap:wrap;max-width:100%;background:#11162a;border:1px solid var(--line2);border-radius:10px;padding:3px;gap:2px}
 .seg button{background:none;border:0;padding:6px 12px;border-radius:7px;cursor:pointer;color:var(--muted)}
 .seg button.on{background:var(--panel2);color:var(--text)}
 .month-nav{display:flex;align-items:center;gap:8px}
@@ -191,6 +196,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}
     <nav class="tabs" id="tabs"></nav>
     <div class="spacer"></div>
     <span class="sync" id="sync">Sincronizado</span>
+    <button class="icon-btn" id="btnDeshacer" title="Nada que deshacer" onclick="deshacer()" disabled style="opacity:.35"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
     <button class="icon-btn" title="Bloquear" onclick="bloquear()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></button>
     <button class="icon-btn" title="Actualizar" onclick="recargar()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg></button>
   </div></header>
@@ -1511,13 +1517,13 @@ function vAjustes() {
 
     <div class="card"><h3>Tiendas y su tarjeta</h3>
       <p class="tiny muted" style="margin-top:-4px">Al elegir la tienda en Registrar, se marca su tarjeta. Las tiendas nuevas se guardan solas al registrar una compra.</p>
-      <div class="list">${S.tiendas.map(t => `<div class="li" data-id="${t.id}"><input class="f grow" name="nombre" value="${esc(t.nombre)}"><select class="f" name="tarjeta_id" style="max-width:160px">${tOps(t.tarjeta_id)}</select>
+      <div class="list">${S.tiendas.map(t => `<div class="li" data-id="${t.id}" style="flex-wrap:wrap"><input class="f grow" style="min-width:140px" name="nombre" value="${esc(t.nombre)}"><select class="f" name="tarjeta_id" style="max-width:160px">${tOps(t.tarjeta_id)}</select>
         <button class="btn sm" onclick="guardarFila('tiendas',${t.id},this)">Guardar</button><button class="icon-btn" onclick="borrar('tiendas',${t.id})" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('')}</div>
       <button class="btn sm" style="margin-top:8px" onclick="nuevo('tiendas',{nombre:'Nueva tienda'})">+ Tienda</button></div>
 
     <div class="card"><h3>Respaldo y sesión</h3>
       <p class="small muted">Sesión: ${esc(S.user.email)}</p>
-      <div class="row wrap"><button class="btn" onclick="respaldo()">Descargar respaldo completo (JSON)</button><button class="btn danger" onclick="salir()">Cerrar sesión</button></div></div>`;
+      <div class="row wrap"><button class="btn" onclick="respaldo()">Descargar respaldo</button><button class="btn danger" onclick="salir()">Cerrar sesión</button></div></div>`;
 }
 function leerFila(btn) {
   const cont = btn.closest('[data-id]'), out = {};
@@ -1587,6 +1593,114 @@ function respaldo() {
   const { user, cargado, ...datos } = S;
   descargar(`respaldo_control_tcs_${hoyStr()}.json`, JSON.stringify({ fecha: new Date().toISOString(), ...datos }, null, 1), 'application/json');
 }
+
+// ============================================================
+// DESHACER
+// Antes de cada acción se toma una foto de los datos; al terminar se calcula qué cambió
+// y se guarda la operación inversa. Deshacer aplica esa inversa en la base de datos.
+// ============================================================
+// Orden padre → hijo (para volver a crear); para borrar se usa el orden inverso.
+const TABLAS_UNDO = [
+  ['tarjetas', 'tarjetas'], ['personas', 'personas'], ['tiendas', 'tiendas'], ['recurrentes', 'recurrentes'],
+  ['gastos', 'gastos'], ['cobros', 'cobros'], ['pagos', 'pagos_banco'], ['depositos', 'depositos_cuenta'],
+  ['aportes', 'aportes_sobre'], ['saldos', 'saldos_cuenta'], ['estados', 'estados_cuenta']
+];
+const claveFila = (k, r) => k === 'estados' ? r.tarjeta_id + '|' + r.fecha_corte : String(r.id);
+const filtroFila = (q, k, r) => k === 'estados' ? q.eq('tarjeta_id', r.tarjeta_id).eq('fecha_corte', r.fecha_corte) : q.eq('id', r.id);
+const UNDO = { pila: [], prof: 0, aplicando: false };
+function fotoDatos() { const f = {}; for (const [k] of TABLAS_UNDO) f[k] = structuredClone(S[k] || []); return f; }
+function diferencias(antes) {
+  const ops = { borrar: [], crear: [], restaurar: [] };
+  for (const [k, tabla] of TABLAS_UNDO) {
+    const A = new Map(antes[k].map(r => [claveFila(k, r), r])), B = new Map((S[k] || []).map(r => [claveFila(k, r), r]));
+    for (const [c, r] of B) if (!A.has(c)) ops.borrar.push({ k, tabla, r });            // se agregó → borrar
+    for (const [c, r] of A) if (!B.has(c)) ops.crear.push({ k, tabla, r });             // se eliminó → volver a crear
+    for (const [c, a] of A) {                                                           // se editó → valores anteriores
+      const b = B.get(c); if (!b) continue;
+      const cambios = {};
+      for (const campo of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (JSON.stringify(a[campo] ?? null) !== JSON.stringify(b[campo] ?? null)) cambios[campo] = a[campo] ?? null;
+      }
+      if (Object.keys(cambios).length) ops.restaurar.push({ k, tabla, r: a, cambios });
+    }
+  }
+  return ops;
+}
+function envolverAccion(nombreFn, desc) {
+  const orig = window[nombreFn]; if (typeof orig !== 'function') return;
+  window[nombreFn] = async function (...args) {
+    if (UNDO.aplicando) return;
+    const externo = UNDO.prof === 0, antes = externo ? fotoDatos() : null;
+    UNDO.prof++;
+    try { return await orig.apply(this, args); }
+    finally {
+      UNDO.prof--;
+      if (externo) {
+        const ops = diferencias(antes);
+        if (ops.borrar.length || ops.crear.length || ops.restaurar.length) {
+          UNDO.pila.push({ desc, ops, hora: new Date() });
+          if (UNDO.pila.length > 30) UNDO.pila.shift();
+          pintarDeshacer();
+        }
+      }
+    }
+  };
+}
+[['guardarCompra', 'Registrar compra'], ['guardarGasto', 'Editar gasto'], ['borrar', 'Eliminar'], ['guardarCobro', 'Pago recibido'],
+ ['guardarPagoBanco', 'Pago a la tarjeta'], ['guardarCuadre', 'Cuadre'], ['marcarDepositado', 'Marcar depositado'],
+ ['guardarAporte', 'Aporte al sobre'], ['guardarDeposito', 'Depósito en cuenta TC'], ['guardarSaldo', 'Saldo real'],
+ ['guardarFila', 'Cambio en Ajustes'], ['guardarTarjeta', 'Cambio de tarjeta'], ['nuevo', 'Agregar en Ajustes'],
+ ['nuevoFijo', 'Nuevo cargo fijo'], ['guardarNuevaPersona', 'Nueva persona']].forEach(([f, d]) => envolverAccion(f, d));
+
+function pintarDeshacer() {
+  const b = $('#btnDeshacer'); if (!b) return;
+  const u = UNDO.pila[UNDO.pila.length - 1];
+  b.disabled = !u; b.style.opacity = u ? 1 : .35;
+  b.title = u ? `Deshacer: ${u.desc} (Ctrl+Z)` : 'Nada que deshacer';
+}
+function resumenOps(ops) {
+  const n = ops.borrar.length + ops.crear.length + ops.restaurar.length;
+  return `${n} registro(s)`;
+}
+async function deshacer() {
+  const u = UNDO.pila[UNDO.pila.length - 1];
+  if (!u || UNDO.aplicando) return;
+  if (!confirm(`¿Deshacer "${u.desc}"? Se revertirán ${resumenOps(u.ops)} en la base de datos.`)) return;
+  UNDO.aplicando = true; setSync('busy');
+  const orden = k => TABLAS_UNDO.findIndex(t => t[0] === k);
+  try {
+    // 1) borrar lo agregado (hijos primero)
+    for (const o of [...u.ops.borrar].sort((a, b) => orden(b.k) - orden(a.k))) {
+      const { error } = await filtroFila(sb.from(o.tabla).delete(), o.k, o.r); if (error) throw error;
+    }
+    // 2) volver a crear lo eliminado (padres primero), con su mismo id
+    for (const o of [...u.ops.crear].sort((a, b) => orden(a.k) - orden(b.k))) {
+      let { error } = await sb.from(o.tabla).insert(o.r);
+      if (error && /generated always|428C9|non-DEFAULT/i.test(error.message + error.code)) {
+        const { id, ...sinId } = o.r; ({ error } = await sb.from(o.tabla).insert(sinId)); // si no se corrió 6_deshacer.sql
+      }
+      if (error) throw error;
+    }
+    // 3) devolver los valores anteriores de lo editado
+    for (const o of u.ops.restaurar) {
+      const { error } = await filtroFila(sb.from(o.tabla).update(o.cambios), o.k, o.r); if (error) throw error;
+    }
+    UNDO.pila.pop();
+    toast(`Deshecho: ${u.desc}`);
+  } catch (e) {
+    toast('No se pudo deshacer por completo: ' + (e.message || e) + '. Revisa los datos.', true);
+  } finally {
+    UNDO.aplicando = false;
+    await recargar(true); render(); pintarDeshacer();
+  }
+}
+// Ctrl+Z en computadora (fuera de los campos de texto, donde Ctrl+Z sigue deshaciendo lo escrito)
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
+  const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (!S.user || $('#app').classList.contains('hidden') || $('#modalRoot').innerHTML) return;
+  e.preventDefault(); deshacer();
+});
 
 // ============================================================
 // ARRANQUE
