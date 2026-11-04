@@ -596,14 +596,17 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.user && Date.now() - S.cargado > 60000 && UI.tab !== 'registrar') recargar(true).then(render);
 });
 
-// Cargos fijos: se crean una sola vez por ciclo de cada tarjeta (la base de datos impide duplicados).
+// Cargos fijos: se crean el día del mes en que el banco los cobra (dia_cargo), en el ciclo que les toca según esa fecha.
+// Si aún no llega ese día este mes, no se crea nada. Una sola vez por ciclo (la base de datos impide duplicados).
 async function generarFijos() {
   const h = hoyStr(), filas = [];
   for (const r of activos(S.recurrentes)) {
     const t = tar(r.tarjeta_id); if (!t.id || t.activo === false) continue;
-    const c = calcCiclo(h, t);
+    const fecha = r.dia_cargo ? ymd(+h.slice(0, 4), +h.slice(5, 7), r.dia_cargo) : h;
+    if (fecha > h) continue;
+    const c = calcCiclo(fecha, t);
     if (S.gastos.some(g => g.recurrente_id === r.id && g.fecha_corte === c.fecha_corte)) continue;
-    filas.push({ fecha: h, tarjeta_id: r.tarjeta_id, persona_id: r.persona_id, descripcion: r.descripcion, monto: r.monto, categoria: r.categoria, recurrente_id: r.id, ...c });
+    filas.push({ fecha, tarjeta_id: r.tarjeta_id, persona_id: r.persona_id, descripcion: r.descripcion, monto: r.monto, categoria: r.categoria, recurrente_id: r.id, ...c });
   }
   if (!filas.length) return;
   try {
@@ -1892,10 +1895,11 @@ function vAjustes() {
       <p class="tiny muted">Para que un sobre reciba solo los gastos de una categoría, ponle el mismo nombre que la categoría (por ejemplo “Limpieza”).</p></div>
 
     <div class="card"><h3>Cargos fijos</h3>
-      <p class="tiny muted" style="margin-top:-4px">Se agregan solos una vez por ciclo de cada tarjeta, al abrir la app. Si un mes el monto cambia, edita ese gasto en Movimientos.</p>
-      <div class="scroll-x"><table class="t centro"><tr><th>Descripción</th><th>Monto</th><th>Tarjeta</th><th>Persona</th><th>Categoría</th><th>Activo</th><th></th></tr>
+      <p class="tiny muted" style="margin-top:-4px">Se agregan solos el <b>día del cargo</b> (el día del mes en que el banco lo cobra), en el estado de cuenta que les toca. No los registres a mano, o quedarán duplicados. Si un mes el monto cambia, edita ese gasto en Movimientos.</p>
+      <div class="scroll-x"><table class="t centro"><tr><th>Descripción</th><th>Monto</th><th>Día del cargo</th><th>Tarjeta</th><th>Persona</th><th>Categoría</th><th>Activo</th><th></th></tr>
       ${S.recurrentes.map(r => `<tr data-id="${r.id}"><td><input class="f" name="descripcion" value="${esc(r.descripcion)}" style="min-width:110px"></td>
         <td><div class="money"><span>S/</span><input class="f num" name="monto" inputmode="decimal" value="${r.monto.toFixed(2)}" style="width:110px"></div></td>
+        <td><input class="f num" name="dia_cargo" type="number" min="1" max="31" inputmode="numeric" value="${r.dia_cargo || ''}" style="width:64px"></td>
         <td><select class="f" name="tarjeta_id">${tOps(r.tarjeta_id)}</select></td><td><select class="f" name="persona_id">${pOps(r.persona_id)}</select></td>
         <td><select class="f" name="categoria">${CATEGORIAS.map(c => `<option ${c === r.categoria ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
         <td><input type="checkbox" name="activo" ${r.activo !== false ? 'checked' : ''}></td>
@@ -1917,7 +1921,7 @@ function leerFila(btn) {
   cont.querySelectorAll('[name]').forEach(el => {
     const k = el.name;
     if (el.type === 'checkbox') out[k] = el.checked;
-    else if (['dia_corte', 'dia_pago', 'tarjeta_id', 'persona_id', 'orden'].includes(k)) out[k] = el.value ? Number(el.value) : null;
+    else if (['dia_corte', 'dia_pago', 'dia_cargo', 'tarjeta_id', 'persona_id', 'orden'].includes(k)) out[k] = el.value ? Number(el.value) : null;
     else if (['monto', 'linea_credito'].includes(k)) out[k] = el.value.trim() ? parseMonto(el.value) : null;
     else out[k] = el.value.trim() || (k === 'telefono' ? null : el.value.trim());
   });
@@ -1928,6 +1932,7 @@ async function guardarFila(tabla, id, btn) {
   if ('monto' in row && (row.monto == null || isNaN(row.monto))) return toast('Monto inválido', true);
   if (tabla === 'recurrentes' && !row.tarjeta_id) return toast('Elige la tarjeta del cargo fijo', true);
   if (tabla === 'recurrentes' && row.activo && !row.monto) return toast('Pon el monto antes de activar el cargo fijo', true);
+  if (tabla === 'recurrentes' && row.activo && !(row.dia_cargo >= 1 && row.dia_cargo <= 31)) return toast('Pon el día del mes en que el banco cobra este cargo (1 a 31)', true);
   const data = numerico(await db(sb.from(tabla).update(row).eq('id', id).select().single(), 'Guardado'));
   const k = { personas: 'personas', recurrentes: 'recurrentes', tiendas: 'tiendas' }[tabla];
   Object.assign(S[k].find(x => x.id === id), data);
