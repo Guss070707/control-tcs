@@ -1525,7 +1525,7 @@ function tusGastos(tit, mes, propioC) {
       ${falta < 0 ? `<div class="tiny muted" style="margin-top:2px">Los ${fmt(fromC(-falta))} extra están sumados al A favor de ${esc(cuentaNombre(t))}.</div>` : ''}
       <div class="tiny" style="margin-top:4px"><a href="#" onclick="verMiDetalle(${t.id},'${fin}','${mes}');return false">Ver mis gastos y depósitos en ${esc(t.nombre)}</a></div></div>`;
   }).join('');
-  return `<div class="card"><div class="row between"><h3 style="margin:0">Tú (${esc(tit.nombre)})</h3><span class="small muted">Tus gastos de ${n}: <b class="num" style="color:var(--text)">${fmt(fromC(propioC))}</b></span></div>
+  return `<div class="card"><div class="row between wrap"><h3 style="margin:0">Tú (${esc(tit.nombre)})</h3><span class="row wrap" style="gap:10px"><span class="small muted">Tus gastos de ${n}: <b class="num" style="color:var(--text)">${fmt(fromC(propioC))}</b></span><button class="btn sm" onclick="pdfEstadoCuenta(${tit.id})">Tu estado de cuenta (PDF)</button></span></div>
     <div class="tiny muted" style="margin-top:4px">Lo tuyo no se cobra a nadie, pero igual tienes que depositarlo en la cuenta TC de cada tarjeta. Lo que deposites de más va al A favor de la cuenta.</div>
     ${filas || '<div class="small muted" style="margin-top:8px">No tienes gastos registrados.</div>'}</div>`;
 }
@@ -1695,8 +1695,13 @@ async function pdfEstadoCuenta(pid) {
   let lib;
   try { lib = await cargarPDF(); } catch (e) { setSync('err'); return toast('No se pudo cargar el generador de PDF. Revisa tu conexión.', true); }
   setSync('ok');
-  const l = liquidacion(pid, mes, S.gastos, S.cobros);
-  const dep = porTarjetaPendiente(pid, mes);
+  const dep = porTarjetaPendiente(pid, mes), esT = esTit(pid);
+  // Para ti (titular) no hay cobros: lo pendiente es lo que te falta depositar en cada cuenta TC
+  const gMes = S.gastos.filter(g => g.persona_id === pid && g.fecha.slice(0, 7) === mes);
+  const yapeT = esT ? Object.values(dep.yapeRecibido || {}).reduce((a, b) => a + b, 0) : 0;
+  const l = esT ? { anterior: 0, mes: fromC(sumC(gMes)), cobrado: 0, aFavor: 0, gastosMes: gMes,
+                    pendiente: fromC(dep.lista.reduce((a, r) => a + Math.max(r.c, 0), 0)) }
+                : liquidacion(pid, mes, S.gastos, S.cobros);
   const doc = new lib.jsPDF({ unit: 'mm', format: 'a4' });
   const tabla = o => (doc.autoTable ? doc.autoTable(o) : window.jspdf_autotable.autoTable(doc, o), doc.lastAutoTable.finalY);
   const W = doc.internal.pageSize.getWidth(), M = 14, AZUL = [37, 84, 180], GRIS = [110, 116, 135], TINTA = [25, 30, 45];
@@ -1711,15 +1716,21 @@ async function pdfEstadoCuenta(pid) {
   // Resumen
   let y = 54;
   const filasRes = [];
-  if (l.anterior) filasRes.push(['Pendiente de meses anteriores', pdfMonto(l.anterior)]);
-  filasRes.push([pdfTxt(`Gastos de ${nMes.split(' ')[0]}`), pdfMonto(l.mes)]);
-  filasRes.push([pdfTxt(`Pagos aplicados a ${nMes.split(' ')[0]}`), l.cobrado ? '-' + pdfMonto(l.cobrado) : pdfMonto(0)]);
+  if (esT) {
+    filasRes.push([pdfTxt(`Tus gastos de ${nMes.split(' ')[0]} (todas las tarjetas)`), pdfMonto(l.mes)]);
+    if (yapeT) filasRes.push([pdfTxt('Te pagaron por Yape/efectivo (lo tienes tú, va a la cuenta TC)'), pdfMonto(fromC(yapeT))]);
+    filasRes.push([pdfTxt(`Lo que aún no depositas, hasta el ${dmy(fin)}`), pdfMonto(l.pendiente)]);
+  } else {
+    if (l.anterior) filasRes.push(['Pendiente de meses anteriores', pdfMonto(l.anterior)]);
+    filasRes.push([pdfTxt(`Gastos de ${nMes.split(' ')[0]}`), pdfMonto(l.mes)]);
+    filasRes.push([pdfTxt(`Pagos aplicados a ${nMes.split(' ')[0]}`), l.cobrado ? '-' + pdfMonto(l.cobrado) : pdfMonto(0)]);
+  }
   y = tabla({ startY: y, margin: { left: M, right: M }, theme: 'plain', body: filasRes,
     styles: { fontSize: 10, cellPadding: { top: 1.6, bottom: 1.6, left: 2, right: 2 }, textColor: TINTA },
     columnStyles: { 1: { halign: 'right', cellWidth: 45 } } });
   doc.setFillColor(...(l.pendiente > 0 ? [255, 244, 222] : [226, 246, 236])); doc.roundedRect(M, y + 2, W - 2 * M, 13, 2, 2, 'F');
   doc.setTextColor(...TINTA); doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
-  doc.text(l.pendiente > 0 ? 'Total a pagar hoy' : (l.aFavor ? 'Saldo a favor' : 'Al día'), M + 4, y + 10.5);
+  doc.text(l.pendiente > 0 ? (esT ? 'Te falta depositar' : 'Total a pagar hoy') : (l.aFavor ? 'Saldo a favor' : 'Al día'), M + 4, y + 10.5);
   doc.text(pdfMonto(l.pendiente > 0 ? l.pendiente : l.aFavor), W - M - 4, y + 10.5, { align: 'right' });
   y += 20;
   // Dónde depositar
@@ -1739,7 +1750,7 @@ async function pdfEstadoCuenta(pid) {
       doc.text(doc.splitTextToSize(pdfTxt('Lo depositado de más en una cuenta ya está descontado del total. Si depositas solo el total, avisa para pasar ese saldo a la cuenta que falta.'), W - 2 * M), M, y + 3);
       y += 6;
     }
-    if (dep.yapeC) {
+    if (dep.yapeC && !esT) {
       doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
       doc.text(doc.splitTextToSize(pdfTxt(`Ya se descontó ${pdfMonto(fromC(dep.yapeC))} que pagaste por Yape/efectivo/otro.`), W - 2 * M), M, y + 3);
       y += 5;
@@ -1763,8 +1774,16 @@ async function pdfEstadoCuenta(pid) {
   const cs = S.cobros.filter(c => c.persona_id === pid && c.fecha >= ini).sort((a, b) => a.fecha.localeCompare(b.fecha));
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...TINTA);
   if (y > 250) { doc.addPage(); y = 16; }
-  doc.text(pdfTxt(`Pagos registrados (del ${dmy(ini)} a hoy)`), M, y + 6); y += 8;
-  if (cs.length) {
+  doc.text(pdfTxt(`${esT ? 'Tus depósitos en cuentas TC' : 'Pagos registrados'} (del ${dmy(ini)} a hoy)`), M, y + 6); y += 8;
+  const ds = esT ? S.depositos.filter(d => d.persona_id === pid && d.fecha >= ini).sort((a, b) => a.fecha.localeCompare(b.fecha)) : [];
+  if (esT && ds.length) {
+    y = tabla({ startY: y, margin: { left: M, right: M }, head: [['Fecha', 'Cuenta', 'Nota', 'Monto']],
+      body: ds.map(d => [dmy(d.fecha), pdfTxt(cuentaNombre(tar(d.tarjeta_id))), pdfTxt(d.nota || ''), pdfMonto(d.monto)]),
+      foot: [[{ content: 'Total depositado', colSpan: 3, styles: { halign: 'right' } }, pdfMonto(fromC(sumC(ds)))]],
+      headStyles: { fillColor: [232, 236, 245], textColor: TINTA, fontSize: 9 }, footStyles: { fillColor: [245, 247, 251], textColor: TINTA, fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 1.8 }, columnStyles: { 0: { cellWidth: 24 }, 3: { halign: 'right', cellWidth: 28 } } }) + 4;
+  } else if (esT) { doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...GRIS); doc.text(pdfTxt('Aún no hay depósitos registrados en este periodo.'), M, y + 4); y += 8; }
+  else if (cs.length) {
     y = tabla({ startY: y, margin: { left: M, right: M }, head: [['Fecha', 'Forma', 'Cuenta', 'Monto']],
       body: cs.map(c => { const d = S.depositos.find(x => x.cobro_id === c.id); return [dmy(c.fecha), pdfTxt(d ? 'Depósito' : (METODOS[c.metodo] || c.metodo)), pdfTxt(d ? cuentaNombre(tar(d.tarjeta_id)) : '—'), pdfMonto(c.monto)]; }),
       foot: [[{ content: 'Total pagado', colSpan: 3, styles: { halign: 'right' } }, pdfMonto(fromC(sumC(cs)))]],
@@ -1774,7 +1793,7 @@ async function pdfEstadoCuenta(pid) {
   // Notas y pie
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
   if (y > 280) { doc.addPage(); y = 16; }
-  doc.text(doc.splitTextToSize(pdfTxt('Los pagos se aplican primero a la deuda más antigua. Deposita en la cuenta indicada y avisa el monto exacto.'), W - 2 * M), M, y + 4);
+  doc.text(doc.splitTextToSize(pdfTxt(esT ? 'Lo que depositas de más va al A favor de la cuenta; no cubre lo de los meses siguientes.' : 'Los pagos se aplican primero a la deuda más antigua. Deposita en la cuenta indicada y avisa el monto exacto.'), W - 2 * M), M, y + 4);
   const n = doc.internal.getNumberOfPages();
   for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(...GRIS); doc.text(pdfTxt(`Control TCs · página ${i} de ${n}`), W / 2, doc.internal.pageSize.getHeight() - 8, { align: 'center' }); }
   const nombre = `Estado_de_cuenta_${norm(p.nombre).replace(/[^a-z0-9]+/g, '_')}_${MESES[+mes.slice(5, 7) - 1]}_${mes.slice(0, 4)}.pdf`;
