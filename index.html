@@ -101,6 +101,8 @@ label.l{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
 .sep{border:0;border-top:1px solid var(--line);margin:12px 0}
 .seccion{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
 details.compra{border-bottom:1px solid var(--line)}
+.li.pagado{background:rgba(63,191,138,.10);border-radius:8px}
+.li.parcial{background:rgba(63,191,138,.05);border-radius:8px}
 details.compra summary{margin:0;display:flex;gap:10px;align-items:center;padding:10px 2px;cursor:pointer;list-style:none;color:var(--text);font-size:14px}
 details.compra summary::-webkit-details-marker{display:none}
 details.compra summary .c-f{color:var(--muted);font-size:12px;width:42px;flex:none}
@@ -1489,6 +1491,39 @@ function calcPendientes(mes) {
   }
   return (_cachePend[mes] = out);
 }
+// Qué parte de cada gasto de una persona ya está pagada (céntimos por id de gasto).
+// 1) Un pago hecho al registrar la compra (o con "Pago de: …") paga primero esa compra.
+// 2) Un depósito en la cuenta TC paga los gastos de ESA tarjeta, del más antiguo al más nuevo.
+// 3) Lo pagado por Yape/efectivo/otro paga lo que quede, empezando por la tarjeta con gastos más antiguos
+//    (igual que el cálculo de "¿Dónde debe depositar?").
+function pagadoPorGasto(pid) {
+  const gs = S.gastos.filter(g => g.persona_id === pid).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.id - b.id);
+  const falta = new Map(gs.map(g => [g.id, Math.max(toC(g.monto), 0)])), pag = new Map(gs.map(g => [g.id, 0]));
+  const aplicar = (cands, c) => {
+    for (const g of cands) { if (c <= 0) break; const f = falta.get(g.id); if (!f) continue; const a = Math.min(f, c); falta.set(g.id, f - a); pag.set(g.id, pag.get(g.id) + a); c -= a; }
+    return c;
+  };
+  const vinculados = (x, tid) => {
+    const nota = x.nota || '', cand = gs.filter(g => tid == null || g.tarjeta_id === tid);
+    if (/^Pagado al registrar/.test(nota)) { const t0 = Date.parse(x.creado); return cand.filter(g => g.fecha === x.fecha && Math.abs(Date.parse(g.creado) - t0) < 120000); }
+    if (/^Pago de: /.test(nota)) { const d = nota.slice(9).trim(); return cand.filter(g => g.descripcion === d).reverse(); }
+    return [];
+  };
+  const poolT = {}; let global = 0;
+  gs.forEach(g => { if (toC(g.monto) < 0) poolT[g.tarjeta_id] = (poolT[g.tarjeta_id] || 0) - toC(g.monto); }); // descuentos
+  const conDep = new Set();
+  for (const d of S.depositos.filter(d => d.persona_id === pid)) {
+    if (d.cobro_id) conDep.add(d.cobro_id);
+    const ref = d.cobro_id ? (S.cobros.find(c => c.id === d.cobro_id) || d) : d;
+    const resto = aplicar(vinculados(ref, d.tarjeta_id), toC(d.monto));
+    poolT[d.tarjeta_id] = (poolT[d.tarjeta_id] || 0) + resto;
+  }
+  for (const c of S.cobros.filter(c => c.persona_id === pid && !conDep.has(c.id))) global += aplicar(vinculados(c, null), toC(c.monto));
+  for (const [tid, c] of Object.entries(poolT)) aplicar(gs.filter(g => g.tarjeta_id === +tid), c);
+  const primera = {}; gs.forEach(g => { if (!primera[g.tarjeta_id]) primera[g.tarjeta_id] = g.fecha; });
+  for (const tid of Object.keys(primera).sort((a, b) => primera[a].localeCompare(primera[b]))) global = aplicar(gs.filter(g => g.tarjeta_id === +tid), global);
+  return pag;
+}
 function porTarjetaPendiente(pid, mes) { return calcPendientes(mes)[pid] || { lista: [], yapeC: 0, asign: {} }; }
 // Lo que todos (personas, sobres y tú) aún deben depositar en la cuenta TC de una tarjeta, hasta hoy
 function porDepositarC(tid) {
@@ -1571,9 +1606,9 @@ function tarjetaPersona(p, l, mes) {
       ${l.aFavor ? `<tr><td class="muted">Saldo a favor (se descuenta solo)</td><td class="right ok">${fmt(l.aFavor)}</td></tr>` : ''}
     </table>
     ${l.pendiente > 0 ? dondeDepositar(p, mes, '¿Dónde debe depositar?') : ''}
-    ${l.gastosMes.length ? `<details><summary>Ver detalle (${l.gastosMes.length})</summary>${Object.entries(porT).map(([tid, gs]) => `
+    ${l.gastosMes.length ? (pg => `<details><summary>Ver detalle (${l.gastosMes.length})</summary><div class="tiny muted" style="margin:4px 0">En verde: lo que ya está pagado.</div>${Object.entries(porT).map(([tid, gs]) => `
       <div class="day">${esc(tar(tid).nombre)} · ${fmt(fromC(sumC(gs)))}</div>
-      <div class="list">${gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(g => filaGasto(g, true)).join('')}</div>`).join('')}</details>` : ''}
+      <div class="list">${gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(g => filaGasto(g, true, pg.get(g.id))).join('')}</div>`).join('')}</details>`)(pagadoPorGasto(p.id)) : ''}
     ${l.cobrosMes.length ? `<details><summary>Pagos recibidos en ${n} (${l.cobrosMes.length})</summary><div class="list">${l.cobrosMes.map(filaCobro).join('')}</div></details>` : ''}
     <div class="row wrap" style="margin-top:12px">
       <button class="btn sm pri" onclick="mCobro(${p.id}, ${Math.max(l.pendiente, 0)})">Registrar pago</button>
@@ -1761,14 +1796,30 @@ async function pdfEstadoCuenta(pid) {
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...TINTA);
   doc.text(pdfTxt(`Gastos de ${nMes}`), M, y + 4); y += 6;
   const porT = {}; l.gastosMes.forEach(g => (porT[g.tarjeta_id] ||= []).push(g));
+  const pg = pagadoPorGasto(pid), VERDE = [214, 243, 225], VERDE2 = [236, 249, 240], TVERDE = [18, 110, 62];
+  if (l.gastosMes.length) {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
+    doc.setFillColor(...VERDE); doc.rect(M, y + 0.6, 4, 3, 'F'); doc.text(pdfTxt('Pagado'), M + 5.5, y + 3);
+    doc.setFillColor(...VERDE2); doc.rect(M + 22, y + 0.6, 4, 3, 'F'); doc.text(pdfTxt('Pagado en parte'), M + 27.5, y + 3);
+    doc.setTextColor(...TINTA); y += 4;
+  }
   if (!l.gastosMes.length) { doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...GRIS); doc.text('Sin gastos en este mes.', M, y + 4); y += 8; }
   for (const [tid, gs] of Object.entries(porT)) {
     gs.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.id - b.id);
-    y = tabla({ startY: y + 2, margin: { left: M, right: M }, head: [[{ content: pdfTxt(`${tar(tid).nombre}  ·  ${gs.length} gasto(s)`), colSpan: 4 }], ['Fecha', 'Tienda', 'Producto', 'Monto']],
-      body: gs.map(g => [dm(g.fecha), pdfTxt(g.tienda || ''), pdfTxt(g.descripcion + (g.nota ? ` (${g.nota})` : '')), pdfMonto(g.monto)]),
-      foot: [[{ content: 'Subtotal', colSpan: 3, styles: { halign: 'right' } }, pdfMonto(fromC(sumC(gs)))]],
+    const pagT = gs.reduce((a, g) => a + Math.min(pg.get(g.id) || 0, Math.max(toC(g.monto), 0)), 0);
+    const faltaT = gs.reduce((a, g) => a + Math.max(toC(g.monto) - (pg.get(g.id) || 0), 0), 0);
+    y = tabla({ startY: y + 2, margin: { left: M, right: M }, head: [[{ content: pdfTxt(`${tar(tid).nombre}  ·  ${gs.length} gasto(s)`), colSpan: 5 }], ['Fecha', 'Tienda', 'Producto', 'Estado', 'Monto']],
+      body: gs.map(g => {
+        const tot = toC(g.monto), p_ = pg.get(g.id) || 0, ok = tot > 0 && p_ >= tot, parte = tot > 0 && p_ > 0 && p_ < tot;
+        const st = ok ? { fillColor: VERDE, textColor: TVERDE } : parte ? { fillColor: VERDE2 } : {};
+        const estado = tot <= 0 ? 'Descuento' : ok ? 'Pagado' : parte ? 'Falta ' + pdfMonto(fromC(tot - p_)) : 'Pendiente';
+        return [dm(g.fecha), pdfTxt(g.tienda || ''), pdfTxt(g.descripcion + (g.nota ? ` (${g.nota})` : '')), pdfTxt(estado), pdfMonto(g.monto)].map(c => ({ content: c, styles: st }));
+      }),
+      foot: [[{ content: 'Subtotal', colSpan: 4, styles: { halign: 'right' } }, pdfMonto(fromC(sumC(gs)))],
+             [{ content: 'Ya pagado', colSpan: 4, styles: { halign: 'right', textColor: TVERDE } }, { content: pdfMonto(fromC(pagT)), styles: { textColor: TVERDE } }],
+             [{ content: 'Falta pagar', colSpan: 4, styles: { halign: 'right' } }, pdfMonto(fromC(faltaT))]],
       headStyles: { fillColor: [232, 236, 245], textColor: TINTA, fontSize: 9 }, footStyles: { fillColor: [245, 247, 251], textColor: TINTA, fontStyle: 'bold' },
-      styles: { fontSize: 9, cellPadding: 1.8 }, columnStyles: { 0: { cellWidth: 16 }, 1: { cellWidth: 34 }, 3: { halign: 'right', cellWidth: 28 } } }) + 2;
+      styles: { fontSize: 9, cellPadding: 1.8 }, columnStyles: { 0: { cellWidth: 14 }, 1: { cellWidth: 30 }, 3: { cellWidth: 26 }, 4: { halign: 'right', cellWidth: 24 } } }) + 2;
   }
   // Pagos y depósitos registrados (desde el inicio del mes hasta hoy)
   const cs = S.cobros.filter(c => c.persona_id === pid && c.fecha >= ini).sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -1825,10 +1876,12 @@ function whatsapp(pid) {
 // ============================================================
 // MOVIMIENTOS
 // ============================================================
-function filaGasto(g, compacto) {
-  const p = per(g.persona_id), t = tar(g.tarjeta_id);
-  return `<div class="li" style="cursor:pointer" onclick="mGasto(${g.id})"><span class="dot" style="width:9px;height:9px;border-radius:50%;background:${p.color};flex:none"></span>
-    <div class="main"><div class="t">${esc(g.descripcion)}${g.recurrente_id ? ' <span class="tag">fijo</span>' : ''}</div>
+function filaGasto(g, compacto, pagadoC) {
+  const p = per(g.persona_id), t = tar(g.tarjeta_id), totC = toC(g.monto);
+  const est = pagadoC == null || totC <= 0 ? '' : pagadoC >= totC ? 'pagado' : pagadoC > 0 ? 'parcial' : '';
+  const marca = est === 'pagado' ? ' <span class="badge ok">Pagado</span>' : est === 'parcial' ? ` <span class="badge warn">Falta ${fmt(fromC(totC - pagadoC))}</span>` : '';
+  return `<div class="li ${est}" style="cursor:pointer" onclick="mGasto(${g.id})"><span class="dot" style="width:9px;height:9px;border-radius:50%;background:${p.color};flex:none"></span>
+    <div class="main"><div class="t">${esc(g.descripcion)}${g.recurrente_id ? ' <span class="tag">fijo</span>' : ''}${marca}</div>
     <div class="tiny muted t">${compacto ? dmy(g.fecha) + ' · ' : ''}${esc(p.nombre)} · ${esc(t.nombre)} · ${esc(g.categoria)}${g.tienda ? ' · ' + esc(g.tienda) : ''}${g.nota ? ' · ' + esc(g.nota) : ''}</div></div>
     <b class="num ${g.monto < 0 ? 'ok' : ''}">${fmt(g.monto)}</b>
     ${compacto ? '' : `<button class="icon-btn" title="Editar" onclick="event.stopPropagation();mGasto(${g.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></button>`}</div>`;
