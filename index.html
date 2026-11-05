@@ -425,7 +425,7 @@ const SUPABASE_URL = 'https://pkywdstonhurwxpbdpmq.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_8eumXTJ_XmewcYeL3CcUJw_9ydm7NzJ';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const S = { user: null, personas: [], tarjetas: [], tiendas: [], recurrentes: [], gastos: [], cobros: [], pagos: [], estados: [], aportes: [], depositos: [], saldos: [], cargado: 0 };
+const S = { user: null, personas: [], tarjetas: [], tiendas: [], recurrentes: [], gastos: [], cobros: [], pagos: [], estados: [], aportes: [], depositos: [], saldos: [], traspasos: [], cargado: 0 };
 const UI = { tab: 'inicio', mesCobro: null, mov: { modo: 'compra', desde: null, hasta: null, tarjeta: '', persona: '', cat: '', q: '', tipo: 'gastos' } };
 let F = null; // formulario de registro
 
@@ -579,15 +579,16 @@ const numerico = r => { if ('monto' in r) r.monto = Number(r.monto); if ('total'
 async function recargar(silencioso) {
   setSync('busy');
   try {
-    const [personas, tarjetas, tiendas, recurrentes, gastos, cobros, pagos, estados, aportes, depositos, saldos] = await Promise.all([
+    const [personas, tarjetas, tiendas, recurrentes, gastos, cobros, pagos, estados, aportes, depositos, saldos, traspasos] = await Promise.all([
       traerTodo('personas', ['orden', true]), traerTodo('tarjetas', ['orden', true]), traerTodo('tiendas', ['nombre', true]),
       traerTodo('recurrentes'), traerTodo('gastos', ['fecha', true]), traerTodo('cobros', ['fecha', true]),
       traerTodo('pagos_banco', ['fecha', true]), sb.from('estados_cuenta').select('*').then(r => { if (r.error) throw r.error; return r.data; }),
       traerTodo('aportes_sobre', ['fecha', true]).catch(() => []),  // si aún no se corrió 3_sobres.sql
       traerTodo('depositos_cuenta', ['fecha', true]).catch(() => []), // si aún no se corrió 5_cuentas_tc.sql
-      traerTodo('saldos_cuenta', ['fecha', true]).catch(() => [])
+      traerTodo('saldos_cuenta', ['fecha', true]).catch(() => []),
+      traerTodo('traspasos_cuenta', ['fecha', true]).catch(() => []) // si aún no se corrió 10_traspasos.sql
     ]);
-    Object.assign(S, { personas, tarjetas: tarjetas.map(numerico), tiendas, recurrentes: recurrentes.map(numerico), gastos: gastos.map(numerico), cobros: cobros.map(numerico), pagos: pagos.map(numerico), estados: estados.map(numerico), aportes: aportes.map(numerico), depositos: depositos.map(numerico), saldos: saldos.map(r => (r.saldo = Number(r.saldo), r)), cargado: Date.now() });
+    Object.assign(S, { personas, tarjetas: tarjetas.map(numerico), tiendas, recurrentes: recurrentes.map(numerico), gastos: gastos.map(numerico), cobros: cobros.map(numerico), pagos: pagos.map(numerico), estados: estados.map(numerico), aportes: aportes.map(numerico), depositos: depositos.map(numerico), saldos: saldos.map(r => (r.saldo = Number(r.saldo), r)), traspasos: traspasos.map(numerico), cargado: Date.now() });
     setSync('ok');
     if (!silencioso) { render(); toast('Datos actualizados'); }
   } catch (e) { setSync('err'); toast('No se pudo cargar: ' + (e.message || e), true); }
@@ -742,12 +743,14 @@ function vInicio() {
 const posterior = (x, s) => x.fecha > s.fecha || (x.fecha === s.fecha && String(x.creado || '') > String(s.creado || ''));
 function estadoCuenta(t) {
   const deps = S.depositos.filter(d => d.tarjeta_id === t.id), pags = S.pagos.filter(p => p.tarjeta_id === t.id);
+  const trIn = S.traspasos.filter(x => x.hacia_tarjeta_id === t.id), trOut = S.traspasos.filter(x => x.desde_tarjeta_id === t.id);
   const deudaC = sumC(S.gastos.filter(g => g.tarjeta_id === t.id)) - sumC(pags);
   const snaps = S.saldos.filter(s => s.tarjeta_id === t.id).sort((a, b) => a.fecha.localeCompare(b.fecha) || String(a.creado).localeCompare(String(b.creado)));
-  const movC = (desde, hasta) => sumC(deps.filter(d => posterior(d, desde) && (!hasta || !posterior(d, hasta)))) - sumC(pags.filter(p => posterior(p, desde) && (!hasta || !posterior(p, hasta))));
+  const entre = (arr, desde, hasta) => sumC(arr.filter(x => posterior(x, desde) && (!hasta || !posterior(x, hasta))));
+  const movC = (desde, hasta) => entre(deps, desde, hasta) + entre(trIn, desde, hasta) - entre(pags, desde, hasta) - entre(trOut, desde, hasta);
   const ult = snaps[snaps.length - 1], prev = snaps[snaps.length - 2];
   return {
-    deudaC, ult, snaps, libreC: sumC(deps.filter(d => !d.persona_id)) + extraPersonasC(t.id),
+    deudaC, ult, snaps, libreC: sumC(deps.filter(d => !d.persona_id)) + extraPersonasC(t.id) + sumC(trIn.filter(x => x.entra_a_favor)) - sumC(trOut.filter(x => x.sale_de_favor)),
     esperadoC: ult ? toC(ult.saldo) + movC(ult) : null,
     difUltC: ult && prev ? toC(ult.saldo) - (toC(prev.saldo) + movC(prev, ult)) : null,  // real − esperado al anotar el último saldo
     depMesC: sumC(deps.filter(d => d.fecha.slice(0, 7) === hoyStr().slice(0, 7)))
@@ -772,6 +775,7 @@ function cuentaHtml(t) {
   return `<div class="seccion"><div class="sec-tit">Cuenta ${n}</div>${cuerpo}
     <div class="row wrap" style="margin-top:10px"><button class="btn sm" onclick="mDeposito(${t.id})">Registrar depósito</button>
     <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo real</button>
+    <button class="btn sm" onclick="mTraspaso(${t.id})">Traspasar</button>
     <button class="btn sm ghost" onclick="UI.mov.tipo='depositos';UI.mov.tarjeta='${t.id}';UI.mov.desde='';UI.mov.hasta='';irA('movimientos')">Ver depósitos</button></div></div>`;
 }
 // Línea de crédito y disponible según lo registrado (línea − lo que aún no pagas)
@@ -873,6 +877,28 @@ function infoDeposito(tid) {
   let txt = `${esTit(pid) ? 'Te falta' : 'Le falta'} depositar en ${esc(cuentaNombre(tar(tid)))} por lo gastado hasta ${nombreMes(mes).split(' ')[0]}: <b class="num">${fmt(fromC(f))}</b>.`;
   if (m > f) txt += $('#dpExc').checked ? ` <span class="ok">Los ${fmt(fromC(m - f))} de más irán a <b>A favor</b> de la cuenta.</span>` : ` <span class="warn">Los ${fmt(fromC(m - f))} de más quedarán como saldo de ${esTit(pid) ? 'tu' : 'su'} parte y cubrirán lo de los meses siguientes.</span>`;
   box.innerHTML = txt;
+}
+// Traspaso entre cuentas TC: mueve dinero de una cuenta a otra (no es pago de nadie)
+function mTraspaso(tid) {
+  const t = tar(tid), e = estadoCuenta(t), otras = activos(S.tarjetas).filter(x => x.id !== tid);
+  modal(`Traspaso desde ${cuentaNombre(t)}`, `
+    <p class="small muted" style="margin-top:0">Para cuando pasas dinero de una cuenta TC a otra (por ejemplo, el A favor de una para cubrir lo que le falta a otra).</p>
+    <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="trMonto" inputmode="decimal"></div></div>
+    <div class="field"><label class="l">¿A qué cuenta?</label><select class="f" id="trHacia">${otras.map(x => `<option value="${x.id}">${esc(cuentaNombre(x))}</option>`).join('')}</select></div>
+    <div class="field"><label class="small row" style="gap:6px"><input type="checkbox" id="trSale" ${e.libreC > 0 ? 'checked' : ''}> Sale del A favor de ${esc(cuentaNombre(t))} ${e.libreC > 0 ? `(tiene ${fmt(fromC(e.libreC))})` : ''}</label>
+      <label class="small row" style="gap:6px;margin-top:6px"><input type="checkbox" id="trEntra"> En la cuenta destino queda como A favor (dinero extra)</label>
+      <div class="tiny muted" style="margin-top:6px">Deja la segunda sin marcar si el dinero va a cubrir lo que le falta a esa cuenta.</div></div>
+    <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="trFecha" value="${hoyStr()}"></div>
+    <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="trNota"></div>
+    <button class="btn pri" style="width:100%" onclick="guardarTraspaso(${tid})">Guardar traspaso</button>`, () => $('#trMonto').focus());
+}
+async function guardarTraspaso(tid) {
+  const monto = parseMonto($('#trMonto').value);
+  if (!(monto > 0)) return toast('Monto inválido', true);
+  const row = { fecha: $('#trFecha').value, desde_tarjeta_id: tid, hacia_tarjeta_id: +$('#trHacia').value, monto,
+    sale_de_favor: $('#trSale').checked, entra_a_favor: $('#trEntra').checked, nota: $('#trNota').value.trim() || null };
+  const d = numerico(await db(sb.from('traspasos_cuenta').insert(row).select().single(), 'Traspaso guardado'));
+  S.traspasos.push(d); cerrarModal(); render();
 }
 async function guardarDeposito(tid) {
   const monto = parseMonto($('#dpMonto').value);
@@ -1817,7 +1843,9 @@ function vMovimientos() {
     cuerpo = `<div class="row between"><span class="muted small">${cs.length} pago(s) recibido(s)</span><b class="num">${fmt(fromC(sumC(cs)))}</b></div><div class="list">${cs.map(filaCobro).join('') || '<div class="empty">Sin pagos recibidos.</div>'}</div>`;
   } else if (M.tipo === 'depositos') {
     const ds = S.depositos.filter(d => enRango(d.fecha) && (!M.tarjeta || d.tarjeta_id === +M.tarjeta) && (!M.persona || d.persona_id === +M.persona)).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id);
-    cuerpo = `<div class="row between"><span class="muted small">${ds.length} depósito(s) a cuentas TC</span><b class="num">${fmt(fromC(sumC(ds)))}</b></div><div class="list">${ds.map(d => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(d.tarjeta_id).color}"></span>${esc(cuentaNombre(tar(d.tarjeta_id)))}</span><div class="main tiny muted">${dmy(d.fecha)} · ${d.persona_id ? esc(per(d.persona_id).nombre) : 'A favor (dinero extra)'}${d.cobro_id ? ' · también es su pago' : ''}${d.nota ? ' · ' + esc(d.nota) : ''}</div><b class="num ok">${fmt(d.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('depositos_cuenta',${d.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin depósitos.</div>'}</div>`;
+    const trs = S.traspasos.filter(x => enRango(x.fecha) && (!M.tarjeta || x.desde_tarjeta_id === +M.tarjeta || x.hacia_tarjeta_id === +M.tarjeta) && !M.persona).sort((a, b) => b.fecha.localeCompare(a.fecha));
+    const filaTr = x => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(x.desde_tarjeta_id).color}"></span>${esc(cuentaNombre(tar(x.desde_tarjeta_id)))} → ${esc(cuentaNombre(tar(x.hacia_tarjeta_id)))}</span><div class="main tiny muted">${dmy(x.fecha)} · Traspaso${x.sale_de_favor ? ' · sale del A favor' : ''}${x.entra_a_favor ? ' · entra como A favor' : ''}${x.nota ? ' · ' + esc(x.nota) : ''}</div><b class="num">${fmt(x.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('traspasos_cuenta',${x.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`;
+    cuerpo = `${trs.length ? `<div class="sec-tit">Traspasos entre cuentas (${trs.length})</div><div class="list" style="margin-bottom:12px">${trs.map(filaTr).join('')}</div>` : ''}<div class="row between"><span class="muted small">${ds.length} depósito(s) a cuentas TC</span><b class="num">${fmt(fromC(sumC(ds)))}</b></div><div class="list">${ds.map(d => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(d.tarjeta_id).color}"></span>${esc(cuentaNombre(tar(d.tarjeta_id)))}</span><div class="main tiny muted">${dmy(d.fecha)} · ${d.persona_id ? esc(per(d.persona_id).nombre) : 'A favor (dinero extra)'}${d.cobro_id ? ' · también es su pago' : ''}${d.nota ? ' · ' + esc(d.nota) : ''}</div><b class="num ok">${fmt(d.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('depositos_cuenta',${d.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin depósitos.</div>'}</div>`;
   } else {
     const ps = S.pagos.filter(p => enRango(p.fecha) && (!M.tarjeta || p.tarjeta_id === +M.tarjeta)).sort((a, b) => b.fecha.localeCompare(a.fecha));
     cuerpo = `<div class="row between"><span class="muted small">${ps.length} pago(s) a bancos</span><b class="num">${fmt(fromC(sumC(ps)))}</b></div><div class="list">${ps.map(p => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(p.tarjeta_id).color}"></span>${esc(tar(p.tarjeta_id).nombre)}</span><div class="main tiny muted">${dmy(p.fecha)} · ciclo ${dm(p.fecha_corte)}${p.nota ? ' · ' + esc(p.nota) : ''}</div><b class="num">${fmt(p.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('pagos_banco',${p.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin pagos a bancos.</div>'}</div>`;
@@ -1894,7 +1922,7 @@ async function borrar(tabla, id) {
   if (!confirm(conDeposito ? '¿Eliminar este pago? También se eliminará su depósito en la cuenta TC.' : '¿Eliminar este registro? No se puede deshacer.')) return;
   await db(sb.from(tabla).delete().eq('id', id), 'Eliminado');
   if (tabla === 'cobros') S.depositos = S.depositos.filter(d => d.cobro_id !== id);
-  const k = { gastos: 'gastos', cobros: 'cobros', pagos_banco: 'pagos', tiendas: 'tiendas', recurrentes: 'recurrentes', aportes_sobre: 'aportes', depositos_cuenta: 'depositos', saldos_cuenta: 'saldos' }[tabla];
+  const k = { gastos: 'gastos', cobros: 'cobros', pagos_banco: 'pagos', tiendas: 'tiendas', recurrentes: 'recurrentes', aportes_sobre: 'aportes', depositos_cuenta: 'depositos', saldos_cuenta: 'saldos', traspasos_cuenta: 'traspasos' }[tabla];
   S[k] = S[k].filter(x => x.id !== id); cerrarModal(); render();
 }
 function descargar(nombre, contenido, tipo) {
@@ -2043,7 +2071,7 @@ function respaldo() {
 const TABLAS_UNDO = [
   ['tarjetas', 'tarjetas'], ['personas', 'personas'], ['tiendas', 'tiendas'], ['recurrentes', 'recurrentes'],
   ['gastos', 'gastos'], ['cobros', 'cobros'], ['pagos', 'pagos_banco'], ['depositos', 'depositos_cuenta'],
-  ['aportes', 'aportes_sobre'], ['saldos', 'saldos_cuenta'], ['estados', 'estados_cuenta']
+  ['aportes', 'aportes_sobre'], ['saldos', 'saldos_cuenta'], ['traspasos', 'traspasos_cuenta'], ['estados', 'estados_cuenta']
 ];
 const claveFila = (k, r) => k === 'estados' ? r.tarjeta_id + '|' + r.fecha_corte : String(r.id);
 const filtroFila = (q, k, r) => k === 'estados' ? q.eq('tarjeta_id', r.tarjeta_id).eq('fecha_corte', r.fecha_corte) : q.eq('id', r.id);
@@ -2088,7 +2116,7 @@ function envolverAccion(nombreFn, desc) {
 }
 [['guardarCompra', 'Registrar compra'], ['guardarGasto', 'Editar gasto'], ['borrar', 'Eliminar'], ['guardarCobro', 'Pago recibido'],
  ['guardarPagoBanco', 'Pago a la tarjeta'], ['guardarCuadre', 'Cuadre'], ['marcarDepositado', 'Marcar depositado'],
- ['guardarAporte', 'Aporte al sobre'], ['guardarDeposito', 'Depósito en cuenta TC'], ['guardarSaldo', 'Saldo real'],
+ ['guardarAporte', 'Aporte al sobre'], ['guardarDeposito', 'Depósito en cuenta TC'], ['guardarTraspaso', 'Traspaso entre cuentas'], ['guardarSaldo', 'Saldo real'],
  ['guardarFila', 'Cambio en Ajustes'], ['guardarTarjeta', 'Cambio de tarjeta'], ['nuevo', 'Agregar en Ajustes'],
  ['nuevoFijo', 'Nuevo cargo fijo'], ['guardarNuevaPersona', 'Nueva persona']].forEach(([f, d]) => envolverAccion(f, d));
 
