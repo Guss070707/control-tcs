@@ -1492,12 +1492,14 @@ function calcPendientes(mes) {
   return (_cachePend[mes] = out);
 }
 // Qué parte de cada gasto de una persona ya está pagada (céntimos por id de gasto).
-// 1) Un pago hecho al registrar la compra (o con "Pago de: …") paga primero esa compra.
+// 1) Un pago hecho al registrar la compra (o con "Pago de: …") paga primero esa compra; si no, si el monto es
+//    exactamente lo que cuesta un producto o una boleta, paga ese.
 // 2) Un depósito en la cuenta TC paga los gastos de ESA tarjeta, del más antiguo al más nuevo.
 // 3) Lo pagado por Yape/efectivo/otro paga lo que quede, empezando por la tarjeta con gastos más antiguos
 //    (igual que el cálculo de "¿Dónde debe depositar?").
-function pagadoPorGasto(pid) {
-  const gs = S.gastos.filter(g => g.persona_id === pid).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.id - b.id);
+// 'hasta': solo cuenta gastos hasta esa fecha (fin del mes que se está viendo), igual que "¿Dónde debe depositar?".
+function pagadoPorGasto(pid, hasta) {
+  const gs = S.gastos.filter(g => g.persona_id === pid && (!hasta || g.fecha <= hasta)).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.id - b.id);
   const falta = new Map(gs.map(g => [g.id, Math.max(toC(g.monto), 0)])), pag = new Map(gs.map(g => [g.id, 0]));
   const aplicar = (cands, c) => {
     for (const g of cands) { if (c <= 0) break; const f = falta.get(g.id); if (!f) continue; const a = Math.min(f, c); falta.set(g.id, f - a); pag.set(g.id, pag.get(g.id) + a); c -= a; }
@@ -1509,16 +1511,25 @@ function pagadoPorGasto(pid) {
     if (/^Pago de: /.test(nota)) { const d = nota.slice(9).trim(); return cand.filter(g => g.descripcion === d).reverse(); }
     return [];
   };
+  // Si el monto pagado es exactamente lo que falta de un producto o de una boleta, paga eso
+  const exacto = (c, tid) => {
+    if (c <= 0) return [];
+    const cand = gs.filter(g => (tid == null || g.tarjeta_id === tid) && falta.get(g.id) > 0);
+    const uno = cand.find(g => falta.get(g.id) === c); if (uno) return [uno];
+    const bol = {}; cand.forEach(g => { if (g.boleta_id) (bol[g.boleta_id] ||= []).push(g); });
+    return Object.values(bol).find(arr => arr.reduce((a, g) => a + falta.get(g.id), 0) === c) || [];
+  };
+  const pagar = (x, tid, c) => { c = aplicar(vinculados(x, tid), c); return aplicar(exacto(c, tid), c); };
   const poolT = {}; let global = 0;
   gs.forEach(g => { if (toC(g.monto) < 0) poolT[g.tarjeta_id] = (poolT[g.tarjeta_id] || 0) - toC(g.monto); }); // descuentos
   const conDep = new Set();
   for (const d of S.depositos.filter(d => d.persona_id === pid)) {
     if (d.cobro_id) conDep.add(d.cobro_id);
     const ref = d.cobro_id ? (S.cobros.find(c => c.id === d.cobro_id) || d) : d;
-    const resto = aplicar(vinculados(ref, d.tarjeta_id), toC(d.monto));
+    const resto = pagar(ref, d.tarjeta_id, toC(d.monto));
     poolT[d.tarjeta_id] = (poolT[d.tarjeta_id] || 0) + resto;
   }
-  for (const c of S.cobros.filter(c => c.persona_id === pid && !conDep.has(c.id))) global += aplicar(vinculados(c, null), toC(c.monto));
+  for (const c of S.cobros.filter(c => c.persona_id === pid && !conDep.has(c.id))) global += pagar(c, null, toC(c.monto));
   for (const [tid, c] of Object.entries(poolT)) aplicar(gs.filter(g => g.tarjeta_id === +tid), c);
   const primera = {}; gs.forEach(g => { if (!primera[g.tarjeta_id]) primera[g.tarjeta_id] = g.fecha; });
   for (const tid of Object.keys(primera).sort((a, b) => primera[a].localeCompare(primera[b]))) global = aplicar(gs.filter(g => g.tarjeta_id === +tid), global);
@@ -1608,7 +1619,7 @@ function tarjetaPersona(p, l, mes) {
     ${l.pendiente > 0 ? dondeDepositar(p, mes, '¿Dónde debe depositar?') : ''}
     ${l.gastosMes.length ? (pg => `<details><summary>Ver detalle (${l.gastosMes.length})</summary><div class="tiny muted" style="margin:4px 0">En verde: lo que ya está pagado.</div>${Object.entries(porT).map(([tid, gs]) => `
       <div class="day">${esc(tar(tid).nombre)} · ${fmt(fromC(sumC(gs)))}</div>
-      <div class="list">${gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(g => filaGasto(g, true, pg.get(g.id))).join('')}</div>`).join('')}</details>`)(pagadoPorGasto(p.id)) : ''}
+      <div class="list">${gs.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(g => filaGasto(g, true, pg.get(g.id))).join('')}</div>`).join('')}</details>`)(pagadoPorGasto(p.id, ymd(+mes.slice(0, 4), +mes.slice(5, 7), 31))) : ''}
     ${l.cobrosMes.length ? `<details><summary>Pagos recibidos en ${n} (${l.cobrosMes.length})</summary><div class="list">${l.cobrosMes.map(filaCobro).join('')}</div></details>` : ''}
     <div class="row wrap" style="margin-top:12px">
       <button class="btn sm pri" onclick="mCobro(${p.id}, ${Math.max(l.pendiente, 0)})">Registrar pago</button>
@@ -1796,7 +1807,7 @@ async function pdfEstadoCuenta(pid) {
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...TINTA);
   doc.text(pdfTxt(`Gastos de ${nMes}`), M, y + 4); y += 6;
   const porT = {}; l.gastosMes.forEach(g => (porT[g.tarjeta_id] ||= []).push(g));
-  const pg = pagadoPorGasto(pid), VERDE = [214, 243, 225], VERDE2 = [236, 249, 240], TVERDE = [18, 110, 62];
+  const pg = pagadoPorGasto(pid, fin), VERDE = [214, 243, 225], VERDE2 = [236, 249, 240], TVERDE = [18, 110, 62];
   if (l.gastosMes.length) {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...GRIS);
     doc.setFillColor(...VERDE); doc.rect(M, y + 0.6, 4, 3, 'F'); doc.text(pdfTxt('Pagado'), M + 5.5, y + 3);
