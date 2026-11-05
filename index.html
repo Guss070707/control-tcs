@@ -1512,14 +1512,16 @@ function pagadoPorGasto(pid, hasta) {
     return [];
   };
   // Si el monto pagado es exactamente lo que falta de un producto o de una boleta, paga eso
-  const exacto = (c, tid) => {
+  const exactoEn = (lista, c) => {
     if (c <= 0) return [];
-    const cand = gs.filter(g => (tid == null || g.tarjeta_id === tid) && falta.get(g.id) > 0);
+    const cand = lista.filter(g => falta.get(g.id) > 0);
     const uno = cand.find(g => falta.get(g.id) === c); if (uno) return [uno];
     const bol = {}; cand.forEach(g => { if (g.boleta_id) (bol[g.boleta_id] ||= []).push(g); });
     return Object.values(bol).find(arr => arr.reduce((a, g) => a + falta.get(g.id), 0) === c) || [];
   };
-  const pagar = (x, tid, c) => { c = aplicar(vinculados(x, tid), c); return aplicar(exacto(c, tid), c); };
+  const exacto = (c, tid) => exactoEn(gs.filter(g => tid == null || g.tarjeta_id === tid), c);
+  // Dentro de la compra a la que está amarrado el pago, primero el producto que cuesta exactamente lo pagado
+  const pagar = (x, tid, c) => { const v = vinculados(x, tid); c = aplicar(exactoEn(v, c), c); c = aplicar(v, c); return aplicar(exacto(c, tid), c); };
   const poolT = {}; let global = 0;
   gs.forEach(g => { if (toC(g.monto) < 0) poolT[g.tarjeta_id] = (poolT[g.tarjeta_id] || 0) - toC(g.monto); }); // descuentos
   const conDep = new Set();
