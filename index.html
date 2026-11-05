@@ -495,6 +495,7 @@ const USUARIOS = [
   { nombre: 'Gustavo', email: 'gustavodolorier77@gmail.com' },
   { nombre: 'Andrea', email: 'arrietasalinasandrea@gmail.com' },
 ];
+const VERSION = '05-11 · pagos por producto v3';
 const BLOQUEO_MIN = 5; // minutos fuera de la app antes de pedir el PIN otra vez
 let lgUsuario = 0, lgOcupado = false, ocultoDesde = null;
 function leerUltimoUsuario() { try { return Math.max(0, USUARIOS.findIndex(u => u.email === localStorage.getItem('ctc_usuario'))); } catch (e) { return 0; } }
@@ -2074,7 +2075,7 @@ function vAjustes() {
       <button class="btn sm" style="margin-top:8px" onclick="nuevo('tiendas',{nombre:'Nueva tienda'})">+ Tienda</button></div>
 
     <div class="card"><h3>Respaldo y sesión</h3>
-      <p class="small muted">Sesión: ${esc(S.user.email)}</p>
+      <p class="small muted">Sesión: ${esc(S.user.email)} · Versión de la app: <b>${VERSION}</b></p>
       <div class="row wrap"><button class="btn" onclick="respaldo()">Descargar respaldo</button><button class="btn danger" onclick="salir()">Cerrar sesión</button></div></div>`;
 }
 function leerFila(btn) {
