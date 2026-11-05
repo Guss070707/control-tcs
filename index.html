@@ -747,7 +747,7 @@ function estadoCuenta(t) {
   const movC = (desde, hasta) => sumC(deps.filter(d => posterior(d, desde) && (!hasta || !posterior(d, hasta)))) - sumC(pags.filter(p => posterior(p, desde) && (!hasta || !posterior(p, hasta))));
   const ult = snaps[snaps.length - 1], prev = snaps[snaps.length - 2];
   return {
-    deudaC, ult, snaps, libreC: sumC(deps.filter(d => !d.persona_id)),
+    deudaC, ult, snaps, libreC: sumC(deps.filter(d => !d.persona_id)) + extraPersonasC(t.id),
     esperadoC: ult ? toC(ult.saldo) + movC(ult) : null,
     difUltC: ult && prev ? toC(ult.saldo) - (toC(prev.saldo) + movC(prev, ult)) : null,  // real − esperado al anotar el último saldo
     depMesC: sumC(deps.filter(d => d.fecha.slice(0, 7) === hoyStr().slice(0, 7)))
@@ -795,7 +795,7 @@ function matrizPorDepositar() {
   for (const p of personasOrd().concat(S.personas.filter(x => x.activo === false))) {
     const lista = porTarjetaPendiente(p.id, '9999-12').lista, celdas = {};
     let tot = 0;
-    for (const r of lista) if (ts.some(t => t.id === r.tid)) { celdas[r.tid] = r.c; tot += r.c; }
+    for (const r of lista) if (r.c > 0 && ts.some(t => t.id === r.tid)) { celdas[r.tid] = r.c; tot += r.c; }
     if (Object.values(celdas).some(c => c !== 0)) filas.push({ p, celdas, tot });
   }
   return filas;
@@ -847,7 +847,7 @@ function resumenCuentas() {
     </table></div>
     <div class="tiny muted" style="margin-top:6px">Si todo está registrado, <b>En cuenta + Falta depositar − Debes a la tarjeta = 0</b>${hayLibre ? ' (sin contar lo que marcaste “A favor”: dinero extra que dejaste en la cuenta a propósito)' : ''}.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div>
     <h3 style="margin:16px 0 4px">¿Quién debe depositar y en qué cuenta?</h3>
-    <div class="tiny muted" style="margin-bottom:4px">Gastos de cada uno menos lo que ya depositó en esa cuenta. Incluye lo facturado y lo aún no facturado. En verde con signo −: depositó de más.</div>
+    <div class="tiny muted" style="margin-bottom:4px">Gastos de cada uno menos lo que ya depositó en esa cuenta. Incluye lo facturado y lo aún no facturado. Lo depositado de más está en la columna A favor.</div>
     ${tabla2}
   </div>`;
 }
@@ -856,18 +856,33 @@ function mDeposito(tid, sugerido) {
   const ps = personasOrd();
   modal(`Depósito en ${cuentaNombre(t)}`, `
     <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="dpMonto" inputmode="decimal" value="${sugerido ? Number(sugerido).toFixed(2) : ''}"></div></div>
-    <div class="field"><label class="l">¿Quién depositó?</label><div class="chips" id="dpPer">${ps.map(p => `<button type="button" class="chip ${tit && p.id === tit.id ? 'on' : ''}" style="--c:${p.color}" data-v="${p.id}" onclick="document.querySelectorAll('#dpPer .chip').forEach(x=>x.classList.toggle('on',x===this))">${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</button>`).join('')}<button type="button" class="chip" style="--c:#94a3b8;border-style:dashed" data-v="0" onclick="document.querySelectorAll('#dpPer .chip').forEach(x=>x.classList.toggle('on',x===this))">A favor (dinero extra)</button></div>
+    <div class="field"><label class="l">¿Quién depositó?</label><div class="chips" id="dpPer">${ps.map(p => `<button type="button" class="chip ${tit && p.id === tit.id ? 'on' : ''}" style="--c:${p.color}" data-v="${p.id}" onclick="document.querySelectorAll('#dpPer .chip').forEach(x=>x.classList.toggle('on',x===this));infoDeposito(${tid})">${esSobre(p) ? 'Sobre ' : ''}${esc(p.nombre)}</button>`).join('')}<button type="button" class="chip" style="--c:#94a3b8;border-style:dashed" data-v="0" onclick="document.querySelectorAll('#dpPer .chip').forEach(x=>x.classList.toggle('on',x===this));infoDeposito(${tid})">A favor (dinero extra)</button></div>
       <div class="tiny muted" style="margin-top:6px">Si no eres tú, también se registra como pago de esa persona (baja lo que te debe). <b>A favor</b>: dinero extra que dejas en la cuenta y no es pago de nadie (redondeos, colchón); queda aparte.</div></div>
+    <div class="field" id="dpMesBox"><label class="l">¿Qué mes está pagando?</label><select class="f" id="dpMes" onchange="infoDeposito(${tid})">${opcionesMes(mesPorDefecto())}</select>
+      <label class="small row" style="gap:6px;margin-top:8px"><input type="checkbox" id="dpExc" checked onchange="infoDeposito(${tid})"> Si deposita de más, mandar el excedente a <b>A favor</b></label>
+      <div class="tiny" id="dpInfo" style="margin-top:6px"></div></div>
     <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="dpFecha" value="${hoyStr()}"></div>
     <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="dpNota"></div>
-    <button class="btn pri" style="width:100%" onclick="guardarDeposito(${tid})">Guardar depósito</button>`, () => $('#dpMonto').focus());
+    <button class="btn pri" style="width:100%" onclick="guardarDeposito(${tid})">Guardar depósito</button>`, () => { $('#dpMonto').focus(); $('#dpMonto').addEventListener('input', () => infoDeposito(tid)); infoDeposito(tid); });
+}
+function infoDeposito(tid) {
+  const pid = +document.querySelector('#dpPer .chip.on').dataset.v, box = $('#dpInfo');
+  $('#dpMesBox').classList.toggle('hidden', pid === 0);
+  if (!pid) return;
+  const mes = $('#dpMes').value, f = faltaEnCuenta(pid, tid, mes), m = toC(parseMonto($('#dpMonto').value) || 0);
+  let txt = `${esTit(pid) ? 'Te falta' : 'Le falta'} depositar en ${esc(cuentaNombre(tar(tid)))} por lo gastado hasta ${nombreMes(mes).split(' ')[0]}: <b class="num">${fmt(fromC(f))}</b>.`;
+  if (m > f) txt += $('#dpExc').checked ? ` <span class="ok">Los ${fmt(fromC(m - f))} de más irán a <b>A favor</b> de la cuenta.</span>` : ` <span class="warn">Los ${fmt(fromC(m - f))} de más quedarán como saldo de ${esTit(pid) ? 'tu' : 'su'} parte y cubrirán lo de los meses siguientes.</span>`;
+  box.innerHTML = txt;
 }
 async function guardarDeposito(tid) {
   const monto = parseMonto($('#dpMonto').value);
   if (!(monto > 0)) return toast('Monto inválido', true);
   const pid = +document.querySelector('#dpPer .chip.on').dataset.v, fecha = $('#dpFecha').value, nota = $('#dpNota').value.trim() || null;
   if (pid === 0) await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: null, monto, nota: nota || 'A favor' });
-  else await registrarPagos({ [pid]: toC(monto) }, 'abono_tarjeta', fecha, tid, null, nota);
+  else {
+    const ex = await registrarPagos({ [pid]: toC(monto) }, 'abono_tarjeta', fecha, tid, $('#dpMes').value, nota, $('#dpExc').checked);
+    if (ex) { toast(`Depósito guardado · ${fmt(fromC(ex))} fueron a A favor`); cerrarModal(); render(); return; }
+  }
   toast('Depósito guardado'); cerrarModal(); render();
 }
 function mSaldo(tid) {
@@ -1260,17 +1275,40 @@ function pagosDeForm(filas) {
 }
 // Registra el pago de cada persona. Si depositó en la cuenta TC, también el depósito en esa cuenta
 // (el dinero entra a la cuenta; la deuda con el banco baja recién cuando pagas la tarjeta).
-async function registrarPagos(por, metodo, fecha, tid, _sinUso, nota) {
-  for (const [pid, c] of Object.entries(por)) {
+// Mes que se paga por defecto: hasta el día 15, el mes anterior (a inicios de mes se abona lo del mes pasado)
+const mesPorDefecto = () => { const h = hoyStr(); return +h.slice(8, 10) <= 15 ? mesMas(h.slice(0, 7), -1) : h.slice(0, 7); };
+// Lo que una persona aún debe depositar en la cuenta TC de una tarjeta por sus gastos hasta fin de 'mes' (céntimos, nunca negativo)
+function faltaEnCuenta(pid, tid, mes) { _cachePend = {}; const r = porTarjetaPendiente(+pid, mes).lista.find(x => x.tid === +tid); return Math.max(r ? r.c : 0, 0); }
+function opcionesMes(sel) {
+  const h = hoyStr().slice(0, 7), ms = [];
+  for (let i = -6; i <= 0; i++) ms.push(mesMas(h, i));
+  if (sel && !ms.includes(sel)) ms.unshift(sel);
+  return ms.map(m => `<option value="${m}" ${m === sel ? 'selected' : ''}>${nombreMes(m)}</option>`).join('');
+}
+// Registra pagos/depósitos. En un depósito a la cuenta TC, lo que pase de lo que la persona debe en esa cuenta
+// (hasta fin de 'mesPaga') NO queda como saldo a favor de la persona: va al "A favor" de la cuenta.
+async function registrarPagos(por, metodo, fecha, tid, mesPaga, nota, excedenteAFavor = true) {
+  let extraTot = 0;
+  for (const [pid, c0] of Object.entries(por)) {
+    let c = c0, extra = 0;
+    if (metodo === 'abono_tarjeta' && mesPaga && excedenteAFavor) { const f = faltaEnCuenta(pid, tid, mesPaga); if (c > f) { extra = c - f; c = f; } }
     const monto = fromC(c);
-    if (esTit(pid)) { // tu propio depósito: no es un cobro
-      if (metodo === 'abono_tarjeta') await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: +pid, monto, nota: nota || 'Depósito propio' });
-      continue;
+    if (c > 0) {
+      if (esTit(pid)) { // tu propio depósito: no es un cobro
+        if (metodo === 'abono_tarjeta') await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: +pid, monto, nota: nota || 'Depósito propio' });
+      } else {
+        const cb = numerico(await db(sb.from('cobros').insert({ persona_id: +pid, monto, metodo, fecha, depositado: metodo !== 'efectivo', fecha_deposito: metodo !== 'efectivo' ? fecha : null, nota }).select().single()));
+        S.cobros.push(cb);
+        if (metodo === 'abono_tarjeta') await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: +pid, monto, cobro_id: cb.id, nota: `Pago de ${per(pid).nombre}` });
+      }
     }
-    const cb = numerico(await db(sb.from('cobros').insert({ persona_id: +pid, monto, metodo, fecha, depositado: metodo !== 'efectivo', fecha_deposito: metodo !== 'efectivo' ? fecha : null, nota }).select().single()));
-    S.cobros.push(cb);
-    if (metodo === 'abono_tarjeta') await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: +pid, monto, cobro_id: cb.id, nota: `Pago de ${per(pid).nombre}` });
+    if (extra > 0) {
+      await nuevoDeposito({ fecha, tarjeta_id: tid, persona_id: null, monto: fromC(extra), nota: `Excedente de ${esTit(pid) ? 'tu depósito' : per(pid).nombre}${nota ? ' · ' + nota : ''}` });
+      extraTot += extra;
+    }
   }
+  _cachePend = {};
+  return extraTot;
 }
 async function nuevoDeposito(row) {
   const d = numerico(await db(sb.from('depositos_cuenta').insert(row).select().single()));
@@ -1297,7 +1335,8 @@ async function guardarCompra() {
     const data = await db(sb.from('gastos').insert(rows).select(), `Guardado: ${rows.length} ítem(s) en ${t.nombre} por ${fmt(fromC(sumC(rows)))}`);
     S.gastos.push(...data.map(numerico));
     if (pagosAhora && Object.keys(pagosAhora).length) {
-      await registrarPagos(pagosAhora, F.yaPagado, F.fecha, F.tarjeta_id, ciclo.fecha_corte, `Pagado al registrar${F.tienda.trim() ? ' · ' + F.tienda.trim() : ''}`);
+      const ex = await registrarPagos(pagosAhora, F.yaPagado, F.fecha, F.tarjeta_id, F.fecha.slice(0, 7), `Pagado al registrar${F.tienda.trim() ? ' · ' + F.tienda.trim() : ''}`);
+      if (ex) setTimeout(() => toast(`${fmt(fromC(ex))} de más: se sumó al A favor de ${cuentaNombre(t)}`), 2600);
       toast(`Guardado y registrado el pago de ${fmt(fromC(Object.values(pagosAhora).reduce((a, b) => a + b, 0)))} (${METODOS[F.yaPagado]})`);
     }
     const tn = F.tienda.trim();
@@ -1382,7 +1421,7 @@ function pintarHistorial() {
 // ============================================================
 function vCobrar() {
   // Por defecto: hasta el día 15 se muestra el mes anterior (el que se está cobrando); después, el mes actual
-  if (!UI.mesCobro) { const h = hoyStr(); UI.mesCobro = +h.slice(8, 10) <= 15 ? mesMas(h.slice(0, 7), -1) : h.slice(0, 7); }
+  if (!UI.mesCobro) UI.mesCobro = mesPorDefecto();
   const mes = UI.mesCobro, tit = titular();
   const todos = activosConSaldo().map(p => ({ p, l: liquidacion(p.id, mes, S.gastos, S.cobros) }));
   const personas = todos.filter(x => !esSobre(x.p) && (x.l.pendiente !== 0 || x.l.mes !== 0 || x.l.cobrosMes.length || x.l.aFavor));
@@ -1428,7 +1467,13 @@ function porTarjetaPendiente(pid, mes) { return calcPendientes(mes)[pid] || { li
 // Lo que todos (personas, sobres y tú) aún deben depositar en la cuenta TC de una tarjeta, hasta hoy
 function porDepositarC(tid) {
   let c = 0;
-  for (const p of S.personas) { const r = porTarjetaPendiente(p.id, '9999-12').lista.find(x => x.tid === tid); if (r) c += r.c; }
+  for (const p of S.personas) { const r = porTarjetaPendiente(p.id, '9999-12').lista.find(x => x.tid === tid); if (r && r.c > 0) c += r.c; }
+  return c;
+}
+// Lo que alguien depositó de más en una cuenta (registros antiguos): se suma al "A favor" de la cuenta
+function extraPersonasC(tid) {
+  let c = 0;
+  for (const p of S.personas) { const r = porTarjetaPendiente(p.id, '9999-12').lista.find(x => x.tid === tid); if (r && r.c < 0) c -= r.c; }
   return c;
 }
 // Tu parte: por cada cuenta TC, tus gastos − lo que depositaste = lo que te falta (mismo cálculo que la tabla de Inicio)
@@ -1449,12 +1494,13 @@ function tusGastos(tit, mes, propioC) {
         <tr><td class="muted">Tus gastos en ${esc(t.nombre)} hasta el ${dm(fin)} <span class="dim">(${n}: ${fmt(fromC(mesC))})</span></td><td class="right">${fmt(fromC(gC))}</td></tr>
         ${yC ? `<tr><td class="muted">+ Te pagaron por Yape/efectivo (para esta tarjeta)</td><td class="right">${fmt(fromC(yC))}</td></tr>` : ''}
         <tr><td class="muted">− Lo que ya depositaste en ${esc(cuentaNombre(t))}</td><td class="right">${fmt(fromC(dC))}</td></tr>
-        <tr><td style="border-top:1px solid var(--line);padding-top:4px"><b>${falta >= 0 ? 'Te falta depositar' : 'Depositaste de más'}</b></td><td class="right" style="border-top:1px solid var(--line);padding-top:4px"><b class="${falta > 0 ? 'warn' : 'ok'}">${fmt(fromC(Math.abs(falta)))}</b></td></tr>
+        <tr><td style="border-top:1px solid var(--line);padding-top:4px"><b>Te falta depositar</b></td><td class="right" style="border-top:1px solid var(--line);padding-top:4px"><b class="${falta > 0 ? 'warn' : 'ok'}">${fmt(fromC(Math.max(falta, 0)))}</b></td></tr>
       </table>
+      ${falta < 0 ? `<div class="tiny muted" style="margin-top:2px">Los ${fmt(fromC(-falta))} extra están sumados al A favor de ${esc(cuentaNombre(t))}.</div>` : ''}
       <div class="tiny" style="margin-top:4px"><a href="#" onclick="verMiDetalle(${t.id},'${fin}','${mes}');return false">Ver mis gastos y depósitos en ${esc(t.nombre)}</a></div></div>`;
   }).join('');
   return `<div class="card"><div class="row between"><h3 style="margin:0">Tú (${esc(tit.nombre)})</h3><span class="small muted">Tus gastos de ${n}: <b class="num" style="color:var(--text)">${fmt(fromC(propioC))}</b></span></div>
-    <div class="tiny muted" style="margin-top:4px">Lo tuyo no se cobra a nadie, pero igual tienes que depositarlo en la cuenta TC de cada tarjeta. Se cuenta todo lo acumulado: si en un mes depositaste de más, cubre lo del siguiente.</div>
+    <div class="tiny muted" style="margin-top:4px">Lo tuyo no se cobra a nadie, pero igual tienes que depositarlo en la cuenta TC de cada tarjeta. Lo que deposites de más va al A favor de la cuenta.</div>
     ${filas || '<div class="small muted" style="margin-top:8px">No tienes gastos registrados.</div>'}</div>`;
 }
 // Detalle de tus gastos y depósitos en una tarjeta, para comprobar el cálculo
@@ -1470,17 +1516,17 @@ function verMiDetalle(tid, fin, mes) {
     <div class="list">${ds.map(d => `<div class="li"><div class="main tiny muted">${dmy(d.fecha)}${d.nota ? ' · ' + esc(d.nota) : ''}</div><b class="num ok">${fmt(d.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('depositos_cuenta',${d.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">—</div>'}</div>
     <div class="row between small" style="margin-top:6px"><b>Total depositado</b><b class="num">${fmt(fromC(sumC(ds)))}</b></div>
     ${yC ? `<div class="row between small" style="margin-top:10px"><span>Te pagaron por Yape/efectivo para esta tarjeta (debes depositarlo)</span><b class="num">${fmt(fromC(yC))}</b></div>` : ''}
-    <hr class="sep"><div class="row between"><b>${sumC(gs) + yC - sumC(ds) >= 0 ? 'Te falta depositar' : 'Depositaste de más'}</b><b class="amount num">${fmt(fromC(Math.abs(sumC(gs) + yC - sumC(ds))))}</b></div>`);
+    <hr class="sep"><div class="row between"><b>Te falta depositar</b><b class="amount num">${fmt(fromC(Math.max(sumC(gs) + yC - sumC(ds), 0)))}</b></div>
+    ${sumC(gs) + yC - sumC(ds) < 0 ? `<div class="tiny muted">Los ${fmt(fromC(sumC(ds) - sumC(gs) - yC))} extra están sumados al A favor de ${esc(cuentaNombre(t))}.</div>` : ''}`);
 }
 function dondeDepositar(p, mes, titulo) {
   const { lista, yapeC } = porTarjetaPendiente(p.id, mes);
-  const pend = lista.filter(r => r.c > 0), favor = lista.filter(r => r.c < 0);
-  if (!pend.length && !favor.length) return '';
+  const pend = lista.filter(r => r.c > 0);
+  if (!pend.length) return '';
   return `<div class="paste-box" style="margin:10px 0 0;padding:10px">
     <div class="small" style="margin-bottom:6px"><b>${titulo}</b></div>
     ${pend.map(r => { const t = tar(r.tid); return `<div class="row between" style="padding:4px 0"><span class="tag"><span class="dot" style="background:${t.color}"></span>${esc(cuentaNombre(t))}</span>
       <span class="row" style="gap:8px"><b class="num">${fmt(fromC(r.c))}</b><button class="btn sm" onclick="mCobro(${p.id}, ${fromC(r.c)}, null, { tarjeta_id: ${t.id} })">Registrar</button></span></div>`; }).join('')}
-    ${favor.map(r => `<div class="tiny ok" style="padding:2px 0">${esc(cuentaNombre(tar(r.tid)))}: depositó ${fmt(fromC(-r.c))} de más</div>`).join('')}
     ${yapeC ? `<div class="tiny muted" style="margin-top:4px">Ya descontado: ${fmt(fromC(yapeC))} que te pagó por Yape/efectivo/otro (se aplicó a la tarjeta con gastos más antiguos). Ese dinero lo tienes tú: aparece en tu parte (Tú) como pendiente de depositar.</div>` : ''}
   </div>`;
 }
@@ -1570,7 +1616,9 @@ function mCobro(pid, sugerido, edit, desdeGasto) {
     <div class="field"><label class="l">${sobre ? '¿Qué haces con ese dinero?' : 'Cómo te pagó'}</label><div class="chips" id="cbMetodo">${Object.keys(METODOS).map(m => `<button type="button" class="chip ${metodoIni === m ? 'on' : ''}" data-v="${m}" onclick="document.querySelectorAll('#cbMetodo .chip').forEach(x=>x.classList.toggle('on',x===this));$('#cbTarBox').classList.toggle('hidden',this.dataset.v!=='abono_tarjeta')">${METODOS[m]}</button>`).join('')}</div>
       <div class="tiny muted" style="margin-top:6px">Efectivo queda “por depositar” hasta que lo lleves a la cuenta. “Depositó en cuenta TC” también suma a la cuenta de esa tarjeta.</div></div>
     <div class="field ${metodoIni === 'abono_tarjeta' ? '' : 'hidden'}" id="cbTarBox"><label class="l">¿En qué cuenta TC depositó?</label>
-      <select class="f" id="cbTar">${activos(S.tarjetas).map(t => `<option value="${t.id}" ${tarIni === t.id ? 'selected' : ''}>${esc(cuentaNombre(t))}</option>`).join('')}</select></div>
+      <select class="f" id="cbTar">${activos(S.tarjetas).map(t => `<option value="${t.id}" ${tarIni === t.id ? 'selected' : ''}>${esc(cuentaNombre(t))}</option>`).join('')}</select>
+      ${c ? '' : `<label class="l" style="margin-top:10px">¿Qué mes está pagando?</label><select class="f" id="cbMes">${opcionesMes(desdeGasto && desdeGasto.mes ? desdeGasto.mes : UI.tab === 'cobrar' && UI.mesCobro ? UI.mesCobro : mesPorDefecto())}</select>
+      <div class="tiny muted" style="margin-top:6px">Si deposita más de lo que debe en esa cuenta hasta ese mes, el excedente va a <b>A favor</b> de la cuenta (no le queda como saldo a favor).</div>`}</div>
     <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="cbFecha" value="${c ? c.fecha : hoyStr()}"></div>
     <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="cbNota" value="${esc(c ? c.nota || '' : '')}"></div>
     <button class="btn pri" style="width:100%" onclick="guardarCobro(${pid}, ${c ? c.id : 'null'})">Guardar</button>`);
@@ -1582,8 +1630,8 @@ async function guardarCobro(pid, id) {
   const fecha = $('#cbFecha').value, nota = $('#cbNota').value.trim() || null, tid = +$('#cbTar').value;
   if (!id) {
     const dg = UI.cobroGasto;
-    await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, metodo === 'abono_tarjeta' ? tid : null, null, nota || (dg && dg.nota) || null);
-    toast('Pago guardado'); cerrarModal(); render(); return;
+    const ex = await registrarPagos({ [pid]: toC(monto) }, metodo, fecha, metodo === 'abono_tarjeta' ? tid : null, metodo === 'abono_tarjeta' ? $('#cbMes').value : null, nota || (dg && dg.nota) || null);
+    toast(ex ? `Pago guardado · ${fmt(fromC(ex))} de más fueron a A favor` : 'Pago guardado'); cerrarModal(); render(); return;
   }
   // Edición: mantener sincronizado el depósito enlazado en la cuenta TC
   const c = S.cobros.find(x => x.id === id), dep = S.depositos.find(d => d.cobro_id === id);
@@ -1649,7 +1697,7 @@ async function pdfEstadoCuenta(pid) {
   doc.text(pdfMonto(l.pendiente > 0 ? l.pendiente : l.aFavor), W - M - 4, y + 10.5, { align: 'right' });
   y += 20;
   // Dónde depositar
-  const porCuenta = dep.lista.filter(r => r.c > 0), deMas = dep.lista.filter(r => r.c < 0);
+  const porCuenta = dep.lista.filter(r => r.c > 0), deMas = [];
   if (l.pendiente > 0 && porCuenta.length) {
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text('Dónde depositar', M, y + 4);
     const filas = porCuenta.map(r => [pdfTxt(cuentaNombre(tar(r.tid))), pdfTxt(tar(r.tid).nombre), pdfMonto(fromC(r.c))]);
@@ -1822,7 +1870,7 @@ function mGasto(id) {
 }
 function pagoDeGasto(id) {
   const g = S.gastos.find(x => x.id === id);
-  mCobro(g.persona_id, g.monto, null, { tarjeta_id: g.tarjeta_id, fecha_corte: g.fecha_corte, nota: `Pago de: ${g.descripcion}` });
+  mCobro(g.persona_id, g.monto, null, { tarjeta_id: g.tarjeta_id, fecha_corte: g.fecha_corte, mes: g.fecha.slice(0, 7), nota: `Pago de: ${g.descripcion}` });
 }
 async function guardarGasto(id) {
   const monto = parseMonto($('#gMonto').value), desc = $('#gDesc').value.trim();
