@@ -782,7 +782,7 @@ function cuentaHtml(t) {
   return `<div class="seccion"><div class="sec-tit">Cuenta ${n}</div>${cuerpo}
     <div class="row wrap" style="margin-top:10px"><button class="btn sm" onclick="mDeposito(${t.id})">Registrar depósito</button>
     <button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo real</button>
-    <button class="btn sm" onclick="mTraspaso(${t.id})">Traspasar</button>
+    <button class="btn sm" onclick="mTraspaso(${t.id})">Traspasar / Retirar</button>
     <button class="btn sm ghost" onclick="UI.mov.tipo='depositos';UI.mov.tarjeta='${t.id}';UI.mov.desde='';UI.mov.hasta='';irA('movimientos')">Ver depósitos</button></div></div>`;
 }
 // Línea de crédito y disponible según lo registrado (línea − lo que aún no pagas)
@@ -890,13 +890,13 @@ function infoDeposito(tid) {
 // Traspaso entre cuentas TC: mueve dinero de una cuenta a otra (no es pago de nadie)
 function mTraspaso(tid) {
   const t = tar(tid), e = estadoCuenta(t), otras = activos(S.tarjetas).filter(x => x.id !== tid);
-  modal(`Traspaso desde ${cuentaNombre(t)}`, `
-    <p class="small muted" style="margin-top:0">Para cuando pasas dinero de una cuenta TC a otra (por ejemplo, el A favor de una para cubrir lo que le falta a otra).</p>
+  modal(`Traspaso o retiro desde ${cuentaNombre(t)}`, `
+    <p class="small muted" style="margin-top:0">Para cuando pasas dinero de una cuenta TC a otra (por ejemplo, el A favor de una para cubrir lo que le falta a otra), o cuando lo retiras a tu cuenta personal.</p>
     <div class="field"><label class="l">Monto</label><div class="money" style="display:block"><span>S/</span><input class="f num" id="trMonto" inputmode="decimal"></div></div>
-    <div class="field"><label class="l">¿A qué cuenta?</label><select class="f" id="trHacia">${otras.map(x => `<option value="${x.id}">${esc(cuentaNombre(x))}</option>`).join('')}</select></div>
+    <div class="field"><label class="l">¿A qué cuenta?</label><select class="f" id="trHacia" onchange="$('#trEntraBox').classList.toggle('hidden', !this.value)">${otras.map(x => `<option value="${x.id}">${esc(cuentaNombre(x))}</option>`).join('')}<option value="">Retiro a mi cuenta personal</option></select></div>
     <div class="field"><label class="small row" style="gap:6px"><input type="checkbox" id="trSale" ${e.libreC > 0 ? 'checked' : ''}> Sale del A favor de ${esc(cuentaNombre(t))} ${e.libreC > 0 ? `(tiene ${fmt(fromC(e.libreC))})` : ''}</label>
-      <label class="small row" style="gap:6px;margin-top:6px"><input type="checkbox" id="trEntra"> En la cuenta destino queda como A favor (dinero extra)</label>
-      <div class="tiny muted" style="margin-top:6px">Deja la segunda sin marcar si el dinero va a cubrir lo que le falta a esa cuenta.</div></div>
+      <div id="trEntraBox"><label class="small row" style="gap:6px;margin-top:6px"><input type="checkbox" id="trEntra"> En la cuenta destino queda como A favor (dinero extra)</label>
+      <div class="tiny muted" style="margin-top:6px">Deja la segunda sin marcar si el dinero va a cubrir lo que le falta a esa cuenta.</div></div></div>
     <div class="field"><label class="l">Fecha</label><input class="f" type="date" id="trFecha" value="${hoyStr()}"></div>
     <div class="field"><label class="l">Nota (opcional)</label><input class="f" id="trNota"></div>
     <button class="btn pri" style="width:100%" onclick="guardarTraspaso(${tid})">Guardar traspaso</button>`, () => $('#trMonto').focus());
@@ -904,9 +904,10 @@ function mTraspaso(tid) {
 async function guardarTraspaso(tid) {
   const monto = parseMonto($('#trMonto').value);
   if (!(monto > 0)) return toast('Monto inválido', true);
-  const row = { fecha: $('#trFecha').value, desde_tarjeta_id: tid, hacia_tarjeta_id: +$('#trHacia').value, monto,
-    sale_de_favor: $('#trSale').checked, entra_a_favor: $('#trEntra').checked, nota: $('#trNota').value.trim() || null };
-  const d = numerico(await db(sb.from('traspasos_cuenta').insert(row).select().single(), 'Traspaso guardado'));
+  const hacia = $('#trHacia').value ? +$('#trHacia').value : null;
+  const row = { fecha: $('#trFecha').value, desde_tarjeta_id: tid, hacia_tarjeta_id: hacia, monto,
+    sale_de_favor: $('#trSale').checked, entra_a_favor: hacia ? $('#trEntra').checked : false, nota: $('#trNota').value.trim() || (hacia ? null : 'Retiro a cuenta personal') };
+  const d = numerico(await db(sb.from('traspasos_cuenta').insert(row).select().single(), hacia ? 'Traspaso guardado' : 'Retiro guardado'));
   S.traspasos.push(d); cerrarModal(); render();
 }
 async function guardarDeposito(tid) {
@@ -1936,8 +1937,8 @@ function vMovimientos() {
   } else if (M.tipo === 'depositos') {
     const ds = S.depositos.filter(d => enRango(d.fecha) && (!M.tarjeta || d.tarjeta_id === +M.tarjeta) && (!M.persona || d.persona_id === +M.persona)).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id);
     const trs = S.traspasos.filter(x => enRango(x.fecha) && (!M.tarjeta || x.desde_tarjeta_id === +M.tarjeta || x.hacia_tarjeta_id === +M.tarjeta) && !M.persona).sort((a, b) => b.fecha.localeCompare(a.fecha));
-    const filaTr = x => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(x.desde_tarjeta_id).color}"></span>${esc(cuentaNombre(tar(x.desde_tarjeta_id)))} → ${esc(cuentaNombre(tar(x.hacia_tarjeta_id)))}</span><div class="main tiny muted">${dmy(x.fecha)} · Traspaso${x.sale_de_favor ? ' · sale del A favor' : ''}${x.entra_a_favor ? ' · entra como A favor' : ''}${x.nota ? ' · ' + esc(x.nota) : ''}</div><b class="num">${fmt(x.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('traspasos_cuenta',${x.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`;
-    cuerpo = `${trs.length ? `<div class="sec-tit">Traspasos entre cuentas (${trs.length})</div><div class="list" style="margin-bottom:12px">${trs.map(filaTr).join('')}</div>` : ''}<div class="row between"><span class="muted small">${ds.length} depósito(s) a cuentas TC</span><b class="num">${fmt(fromC(sumC(ds)))}</b></div><div class="list">${ds.map(d => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(d.tarjeta_id).color}"></span>${esc(cuentaNombre(tar(d.tarjeta_id)))}</span><div class="main tiny muted">${dmy(d.fecha)} · ${d.persona_id ? esc(per(d.persona_id).nombre) : 'A favor (dinero extra)'}${d.cobro_id ? ' · también es su pago' : ''}${d.nota ? ' · ' + esc(d.nota) : ''}</div><b class="num ok">${fmt(d.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('depositos_cuenta',${d.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin depósitos.</div>'}</div>`;
+    const filaTr = x => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(x.desde_tarjeta_id).color}"></span>${esc(cuentaNombre(tar(x.desde_tarjeta_id)))} → ${x.hacia_tarjeta_id ? esc(cuentaNombre(tar(x.hacia_tarjeta_id))) : 'Cuenta personal'}</span><div class="main tiny muted">${dmy(x.fecha)} · ${x.hacia_tarjeta_id ? 'Traspaso' : 'Retiro'}${x.sale_de_favor ? ' · sale del A favor' : ''}${x.entra_a_favor ? ' · entra como A favor' : ''}${x.nota ? ' · ' + esc(x.nota) : ''}</div><b class="num">${fmt(x.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('traspasos_cuenta',${x.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`;
+    cuerpo = `${trs.length ? `<div class="sec-tit">Traspasos y retiros (${trs.length})</div><div class="list" style="margin-bottom:12px">${trs.map(filaTr).join('')}</div>` : ''}<div class="row between"><span class="muted small">${ds.length} depósito(s) a cuentas TC</span><b class="num">${fmt(fromC(sumC(ds)))}</b></div><div class="list">${ds.map(d => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(d.tarjeta_id).color}"></span>${esc(cuentaNombre(tar(d.tarjeta_id)))}</span><div class="main tiny muted">${dmy(d.fecha)} · ${d.persona_id ? esc(per(d.persona_id).nombre) : 'A favor (dinero extra)'}${d.cobro_id ? ' · también es su pago' : ''}${d.nota ? ' · ' + esc(d.nota) : ''}</div><b class="num ok">${fmt(d.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('depositos_cuenta',${d.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin depósitos.</div>'}</div>`;
   } else {
     const ps = S.pagos.filter(p => enRango(p.fecha) && (!M.tarjeta || p.tarjeta_id === +M.tarjeta)).sort((a, b) => b.fecha.localeCompare(a.fecha));
     cuerpo = `<div class="row between"><span class="muted small">${ps.length} pago(s) a bancos</span><b class="num">${fmt(fromC(sumC(ps)))}</b></div><div class="list">${ps.map(p => `<div class="li"><span class="tag"><span class="dot" style="background:${tar(p.tarjeta_id).color}"></span>${esc(tar(p.tarjeta_id).nombre)}</span><div class="main tiny muted">${dmy(p.fecha)} · ciclo ${dm(p.fecha_corte)}${p.nota ? ' · ' + esc(p.nota) : ''}</div><b class="num">${fmt(p.monto)}</b><button class="icon-btn" title="Eliminar" onclick="borrar('pagos_banco',${p.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>`).join('') || '<div class="empty">Sin pagos a bancos.</div>'}</div>`;
