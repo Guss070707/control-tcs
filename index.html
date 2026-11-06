@@ -716,7 +716,11 @@ function vInicio() {
   const costos = activos(S.tarjetas).map(t => ({ t, c: sumC(S.gastos.filter(g => g.tarjeta_id === t.id && g.fecha >= desde && CAT_COSTO.includes(g.categoria))) }));
   const costoC = costos.reduce((a, x) => a + x.c, 0);
 
+  const dias = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const mesTxt = nombreMes(h.slice(0, 7));
   $('#view').innerHTML = `
+    <div class="row between wrap" style="margin-bottom:12px;align-items:baseline"><h2 style="margin:0;font-size:22px">${mesTxt.charAt(0).toUpperCase() + mesTxt.slice(1)}</h2>
+      <span class="small muted">Hoy: ${dias[(p => new Date(p.y, p.m - 1, p.d).getDay())(parseD(h))]} ${dmy(h)}</span></div>
     <div class="grid kpis">
       <div class="card kpi"><div class="lbl" title="Estados de cuenta ya emitidos que falta pagar">Facturado por pagar</div><div class="val num">${fmt(fromC(porPagarC))}</div></div>
       <div class="card kpi"><div class="lbl">Te deben (a la fecha)</div><div class="val num">${fmt(fromC(teDebenC))}</div></div>
@@ -768,7 +772,7 @@ function cuentaHtml(t) {
     const porDep = porDepositarC(t.id), dif = e.esperadoC + porDep - deuda - e.libreC;
     cuerpo = `<table class="tiny num" style="border-collapse:collapse;width:100%;max-width:360px">
         <tr><td class="muted">En cuenta</td><td class="right"><b>${fmt(fromC(e.esperadoC))}</b></td></tr>
-        <tr><td class="muted">+ Falta depositar</td><td class="right">${fmt(fromC(porDep))}</td></tr>
+        <tr><td class="muted">+ Pendiente a depositar</td><td class="right">${fmt(fromC(porDep))}</td></tr>
         <tr><td class="muted">− Debes a la tarjeta (facturado + no facturado)</td><td class="right">${fmt(fromC(deuda))}</td></tr>
         <tr><td style="border-top:1px solid var(--line);padding-top:4px">Diferencia</td><td class="right" style="border-top:1px solid var(--line);padding-top:4px">${dif === 0 ? '<span class="badge ok">✓ Cuadra</span>' : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span>`}</td></tr>
         ${e.libreC ? `<tr><td class="muted">A favor (dinero extra en la cuenta)</td><td class="right"><b class="ok">${fmt(fromC(e.libreC))}</b></td></tr>` : ''}</table>
@@ -813,13 +817,15 @@ function resumenCuentas() {
   const celda = c => c === 0 || c == null ? '<span class="cero">—</span>' : c < 0 ? `<span class="ok" title="Depositó de más">−${fmt(fromC(-c))}</span>` : fmt(fromC(c));
   let tEn = 0, tDep = 0, tDeuda = 0, tDif = 0, tLibre = 0, descuadres = 0, sinSaldo = 0;
   const hayLibre = ts.some(t => estadoCuenta(t).libreC);
+  const conLinea = ts.map(lineaInfo).filter(l => l.lineaC !== null), dispTotC = conLinea.reduce((a, l) => a + l.dispC, 0);
   const filas1 = ts.map(t => {
     const e = estadoCuenta(t), deuda = Math.max(e.deudaC, 0), porDep = porDepositarC(t.id);
     tDeuda += deuda; tDep += porDep;
     const nombre = `<span class="tag"><span class="dot" style="background:${t.color}"></span>${esc(cuentaNombre(t))}</span>`;
-    if (!e.ult) { sinSaldo++; return `<tr><td>${nombre}</td><td><button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></td><td>${celda(porDep)}</td><td>${celda(deuda)}</td><td class="cero">—</td>${hayLibre ? '<td class="cero">—</td>' : ''}</tr>`; }
+    const li = lineaInfo(t), disp = `<td class="muted">${li.lineaC === null ? '<span class="cero">—</span>' : fmt(fromC(li.dispC))}</td>`;
+    if (!e.ult) { sinSaldo++; return `<tr><td>${nombre}</td>${disp}<td><button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></td><td>${celda(porDep)}</td><td>${celda(deuda)}</td><td class="cero">—</td>${hayLibre ? '<td class="cero">—</td>' : ''}</tr>`; }
     const dif = e.esperadoC + porDep - deuda - e.libreC; tEn += e.esperadoC; tDif += dif; tLibre += e.libreC; if (dif !== 0) descuadres++;
-    return `<tr><td>${nombre}</td><td><b>${fmt(fromC(e.esperadoC))}</b></td><td>${celda(porDep)}</td><td>${celda(deuda)}</td>
+    return `<tr><td>${nombre}</td>${disp}<td><b>${fmt(fromC(e.esperadoC))}</b></td><td>${celda(porDep)}</td><td>${celda(deuda)}</td>
       <td>${dif === 0 ? '<span class="badge ok">✓ Cuadra</span>' : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span>`}</td>${hayLibre ? `<td>${e.libreC ? `<b class="ok">${fmt(fromC(e.libreC))}</b>` : '<span class="cero">—</span>'}</td>` : ''}</tr>`;
   }).join('');
   const m = matrizPorDepositar();
@@ -831,8 +837,9 @@ function resumenCuentas() {
     if (!e.ult) return `<div class="bloque row between">${nombre}<button class="btn sm" onclick="mSaldo(${t.id})">Anotar saldo</button></div>`;
     const dif = e.esperadoC + porDep - deuda - e.libreC;
     return `<div class="bloque"><div class="row between">${nombre}${dif === 0 ? '<span class="badge ok">✓ Cuadra</span>' : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span>`}</div>
-      <div class="kv"><span class="k">En cuenta</span><span class="v"><b>${fmt(fromC(e.esperadoC))}</b></span>
-      <span class="k">+ Falta depositar</span><span class="v">${celda(porDep)}</span>
+      <div class="kv">${lineaInfo(t).lineaC === null ? '' : `<span class="k">Línea disponible</span><span class="v">${fmt(fromC(lineaInfo(t).dispC))}</span>`}
+      <span class="k">En cuenta</span><span class="v"><b>${fmt(fromC(e.esperadoC))}</b></span>
+      <span class="k">+ Pendiente a depositar</span><span class="v">${celda(porDep)}</span>
       <span class="k">− Debes a la tarjeta</span><span class="v">${celda(deuda)}</span>
       <span class="sep2"></span><span class="k">= Diferencia</span><span class="v">${dif === 0 ? '<span class="ok">S/ 0.00</span>' : `<b class="${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</b>`}</span>
       ${e.libreC ? `<span class="k">A favor</span><span class="v"><b class="ok">${fmt(fromC(e.libreC))}</b></span>` : ''}</div></div>`;
@@ -843,16 +850,15 @@ function resumenCuentas() {
     <div class="scroll-x solo-pc"><table class="res"><tr><th>Quién</th>${cols.map(t => `<th>${esc(cuentaNombre(t))}</th>`).join('')}<th>Total</th></tr>
     ${m.map(f => `<tr><td><span class="tag"><span class="dot" style="background:${f.p.color}"></span>${titular() && f.p.id === titular().id ? 'Tú' : (esSobre(f.p) ? 'Sobre ' : '') + esc(f.p.nombre)}</span></td>${cols.map(t => `<td>${celda(f.celdas[t.id])}</td>`).join('')}<td><b>${celda(f.tot)}</b></td></tr>`).join('')}
     <tr class="tot"><td>Total</td>${cols.map(t => `<td>${celda(m.reduce((a, f) => a + (f.celdas[t.id] || 0), 0))}</td>`).join('')}<td>${celda(m.reduce((a, f) => a + f.tot, 0))}</td></tr></table></div>`;
-  const conLinea = ts.map(lineaInfo).filter(l => l.lineaC !== null), dispTotC = conLinea.reduce((a, l) => a + l.dispC, 0);
   return `<div class="card" style="margin-top:12px">
     <div class="row between wrap"><h3 style="margin:0">Cuentas TC</h3>${conLinea.length ? `<span class="small muted">Línea disponible en tus tarjetas <b class="num" style="color:var(--text)">${fmt(fromC(dispTotC))}</b></span>` : ''}</div>
     ${descuadres ? `<div class="small bad" style="margin-top:6px">${descuadres} cuenta(s) no cuadran: falta registrar algún movimiento (depósito, cobro del banco o compra).</div>` : ''}
     <div class="solo-movil">${movil1}</div>
     <div class="scroll-x solo-pc" style="margin-top:8px"><table class="res">
-      <tr><th>Cuenta</th><th>En cuenta</th><th>+ Falta depositar</th><th>− Debes a la tarjeta</th><th>= Diferencia</th>${hayLibre ? '<th>A favor</th>' : ''}</tr>${filas1}
-      <tr class="tot"><td>Total</td><td>${fmt(fromC(tEn))}</td><td>${fmt(fromC(tDep))}</td><td>${fmt(fromC(tDeuda))}</td><td>${tDif === 0 ? '<span class="badge ok">✓</span>' : `${tDif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(tDif)))}`}</td>${hayLibre ? `<td><b class="ok">${fmt(fromC(tLibre))}</b></td>` : ''}</tr>
+      <tr><th>Cuenta</th><th>Línea disponible</th><th>En cuenta</th><th>+ Pendiente a depositar</th><th>− Debes a la tarjeta</th><th>= Diferencia</th>${hayLibre ? '<th>A favor</th>' : ''}</tr>${filas1}
+      <tr class="tot"><td>Total</td><td>${conLinea.length ? fmt(fromC(dispTotC)) : '—'}</td><td>${fmt(fromC(tEn))}</td><td>${fmt(fromC(tDep))}</td><td>${fmt(fromC(tDeuda))}</td><td>${tDif === 0 ? '<span class="badge ok">✓</span>' : `${tDif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(tDif)))}`}</td>${hayLibre ? `<td><b class="ok">${fmt(fromC(tLibre))}</b></td>` : ''}</tr>
     </table></div>
-    <div class="tiny muted" style="margin-top:6px">Si todo está registrado, <b>En cuenta + Falta depositar − Debes a la tarjeta = 0</b>${hayLibre ? ' (sin contar lo que marcaste “A favor”: dinero extra que dejaste en la cuenta a propósito)' : ''}.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div>
+    <div class="tiny muted" style="margin-top:6px">Si todo está registrado, <b>En cuenta + Pendiente a depositar − Debes a la tarjeta = 0</b>${hayLibre ? ' (sin contar lo que marcaste “A favor”: dinero extra que dejaste en la cuenta a propósito)' : ''}.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div>
     <h3 style="margin:16px 0 4px">¿Quién debe depositar y en qué cuenta?</h3>
     <div class="tiny muted" style="margin-bottom:4px">Gastos de cada uno menos lo que ya depositó en esa cuenta. Incluye lo facturado y lo aún no facturado. Lo depositado de más está en la columna A favor.</div>
     ${tabla2}
