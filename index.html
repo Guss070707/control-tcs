@@ -772,7 +772,7 @@ function cuentaHtml(t) {
     const porDep = porDepositarC(t.id), dif = e.esperadoC + porDep - deuda - e.libreC;
     cuerpo = `<table class="tiny num" style="border-collapse:collapse;width:100%;max-width:360px">
         <tr><td class="muted">En cuenta</td><td class="right"><b>${fmt(fromC(e.esperadoC))}</b></td></tr>
-        <tr><td class="muted">+ Pendiente a depositar</td><td class="right">${fmt(fromC(porDep))}</td></tr>
+        <tr><td class="muted">+ Deuda del mes</td><td class="right">${fmt(fromC(porDep))}</td></tr>
         <tr><td class="muted">− Debes a la tarjeta (facturado + no facturado)</td><td class="right">${fmt(fromC(deuda))}</td></tr>
         <tr><td style="border-top:1px solid var(--line);padding-top:4px">Diferencia</td><td class="right" style="border-top:1px solid var(--line);padding-top:4px">${dif === 0 ? '<span class="badge ok">✓ Cuadra</span>' : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span>`}</td></tr>
         ${e.libreC ? `<tr><td class="muted">A favor (dinero extra en la cuenta)</td><td class="right"><b class="ok">${fmt(fromC(e.libreC))}</b></td></tr>` : ''}</table>
@@ -839,7 +839,7 @@ function resumenCuentas() {
     return `<div class="bloque"><div class="row between">${nombre}${dif === 0 ? '<span class="badge ok">✓ Cuadra</span>' : `<span class="badge ${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</span>`}</div>
       <div class="kv">${lineaInfo(t).lineaC === null ? '' : `<span class="k">Línea disponible</span><span class="v">${fmt(fromC(lineaInfo(t).dispC))}</span>`}
       <span class="k">En cuenta</span><span class="v"><b>${fmt(fromC(e.esperadoC))}</b></span>
-      <span class="k">+ Pendiente a depositar</span><span class="v">${celda(porDep)}</span>
+      <span class="k">+ Deuda del mes</span><span class="v">${celda(porDep)}</span>
       <span class="k">− Debes a la tarjeta</span><span class="v">${celda(deuda)}</span>
       <span class="sep2"></span><span class="k">= Diferencia</span><span class="v">${dif === 0 ? '<span class="ok">S/ 0.00</span>' : `<b class="${dif < 0 ? 'bad' : 'warn'}">${dif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(dif)))}</b>`}</span>
       ${e.libreC ? `<span class="k">A favor</span><span class="v"><b class="ok">${fmt(fromC(e.libreC))}</b></span>` : ''}</div></div>`;
@@ -855,10 +855,10 @@ function resumenCuentas() {
     ${descuadres ? `<div class="small bad" style="margin-top:6px">${descuadres} cuenta(s) no cuadran: falta registrar algún movimiento (depósito, cobro del banco o compra).</div>` : ''}
     <div class="solo-movil">${movil1}</div>
     <div class="scroll-x solo-pc" style="margin-top:8px"><table class="res">
-      <tr><th>Cuenta</th><th>Línea disponible</th><th>En cuenta</th><th>+ Pendiente a depositar</th><th>− Debes a la tarjeta</th><th>= Diferencia</th>${hayLibre ? '<th>A favor</th>' : ''}</tr>${filas1}
+      <tr><th>Cuenta</th><th>Línea disponible</th><th>En cuenta</th><th>+ Deuda del mes</th><th>− Debes a la tarjeta</th><th>= Diferencia</th>${hayLibre ? '<th>A favor</th>' : ''}</tr>${filas1}
       <tr class="tot"><td>Total</td><td>${conLinea.length ? fmt(fromC(dispTotC)) : '—'}</td><td>${fmt(fromC(tEn))}</td><td>${fmt(fromC(tDep))}</td><td>${fmt(fromC(tDeuda))}</td><td>${tDif === 0 ? '<span class="badge ok">✓</span>' : `${tDif > 0 ? '+' : '−'}${fmt(fromC(Math.abs(tDif)))}`}</td>${hayLibre ? `<td><b class="ok">${fmt(fromC(tLibre))}</b></td>` : ''}</tr>
     </table></div>
-    <div class="tiny muted" style="margin-top:6px">Si todo está registrado, <b>En cuenta + Pendiente a depositar − Debes a la tarjeta = 0</b>${hayLibre ? ' (sin contar lo que marcaste “A favor”: dinero extra que dejaste en la cuenta a propósito)' : ''}.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div>
+    <div class="tiny muted" style="margin-top:6px">Si todo está registrado, <b>En cuenta + Deuda del mes − Debes a la tarjeta = 0</b>${hayLibre ? ' (sin contar lo que marcaste “A favor”: dinero extra que dejaste en la cuenta a propósito)' : ''}.${sinSaldo ? ` Falta anotar el saldo de ${sinSaldo} cuenta(s).` : ''}</div>
     <h3 style="margin:16px 0 4px">¿Quién debe depositar y en qué cuenta?</h3>
     <div class="tiny muted" style="margin-bottom:4px">Gastos de cada uno menos lo que ya depositó en esa cuenta. Incluye lo facturado y lo aún no facturado. Lo depositado de más está en la columna A favor.</div>
     ${tabla2}
