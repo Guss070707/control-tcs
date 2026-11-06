@@ -8,6 +8,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Control TCs</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Control TCs">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='14' width='56' height='38' rx='7' fill='%234f8ef7'/%3E%3Crect x='4' y='22' width='56' height='7' fill='%23121624'/%3E%3Crect x='12' y='38' width='16' height='5' rx='2' fill='%23fff'/%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
 <style>
@@ -495,7 +499,9 @@ const USUARIOS = [
   { nombre: 'Gustavo', email: 'gustavodolorier77@gmail.com' },
   { nombre: 'Andrea', email: 'arrietasalinasandrea@gmail.com' },
 ];
-const VERSION = '05-11 · pagos por producto v3';
+const VERSION = '06-11 · app instalable';
+// Para instalar como app en el celular (solo funciona en https, o sea en GitHub Pages)
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 const BLOQUEO_MIN = 5; // minutos fuera de la app antes de pedir el PIN otra vez
 let lgUsuario = 0, lgOcupado = false, ocultoDesde = null;
 function leerUltimoUsuario() { try { return Math.max(0, USUARIOS.findIndex(u => u.email === localStorage.getItem('ctc_usuario'))); } catch (e) { return 0; } }
